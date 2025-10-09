@@ -193,6 +193,7 @@ int main(int argc, char** argv) {
   // --- Vehicle & MPC ---
   VehicleParams vp; Limits lim; State st;
   MPCParams mpcp; mpcp.N = 20; mpcp.dt = vp.dt; mpcp.L = vp.L;
+  double d_gap = 150.0;  // initial gap for ACC state
   LTV_MPC mpc(mpcp);
 
   // Initialize vehicle pose on chosen starting lane at s_min
@@ -330,6 +331,44 @@ int main(int argc, char** argv) {
 
     mpc.setCorridorBounds(cor.lo, cor.up);
 
+    // std::vector<double> epsi_nom(mpcp.N);
+    // for (int k = 0; k < mpcp.N - 1; ++k) {
+    //     // double ds  = std::max(1e-3, s_grid[k+1] - s_grid[k]);
+    //     // double dey = cor.ey_ref[k+1] - cor.ey_ref[k];
+    //     epsi_nom[k] = epsi;  // nominal heading deviation from centerline
+    // }
+    // epsi_nom.back() = epsi_nom[mpcp.N - 2];  // copy last value
+    // pref.epsi_nom = epsi_nom;
+
+    // --- Synthetic lead profile for ACC (no world obstacle needed) ---
+    pref.v_obj.resize(mpcp.N);
+    pref.has_obj.resize(mpcp.N);
+
+    // Example: start 30 m ahead, lead cruises 22 m/s, then brakes to 10 m/s at t=8–12 s
+    const double v1        = 33.0;      // cruise
+    const double v2        = 20.0;      // after braking
+    const double v3        = 33.0;      // lead car accelarates back to v3
+    const double t_brake_s = 10.0, t_brake_e = 20.0, t_end = 30.0;
+
+    for (int k = 0; k < mpcp.N; ++k) {
+      const double tk = t + k*mpcp.dt;
+      double vlead = v1;
+      if (tk >= t_brake_s && tk <= t_brake_e) {
+        const double u = (tk - t_brake_s) / (t_brake_e - t_brake_s);
+        vlead = v1 + (v2 - v1) * u;              // linear ramp down
+      } else if (tk > t_brake_e && tk <= t_end) {
+        const double u = (tk - t_brake_e) / (t_end - t_brake_e);
+        vlead = v2 + (v3 - v2) * u;              // linear ramp up
+      } else if (tk > t_end) {
+        vlead = v3;
+      }
+      pref.v_obj[k] = vlead;
+      pref.has_obj[k] = 1;                         // tell MPC a lead exists
+    }
+
+    // set initial gap state for ACC
+    xk.d = d_gap;
+
     // --- Solve MPC ---
     MPCControl u_mpc = mpc.solve(xk, pref);
     if (!u_mpc.ok) { u_mpc.a = 0.0; u_mpc.ddelta = 0.0; }  // safe fallback
@@ -359,6 +398,38 @@ int main(int argc, char** argv) {
 
     // Stop if we reach end of map
     if (projC.s_proj > map.s_max() - 1.0) break;
+
+    // ego speed after sim step this cycle:
+    const double v_ego_now = st.v;         // or whatever your state variable is
+
+    // lead speed *at current time t* using the same synthetic law
+    auto lead_speed_now = [&](double t_query){
+      double v = v1;
+      if (t_query >= t_brake_s && t_query <= t_brake_e) {
+        double u = (t_query - t_brake_s) / (t_brake_e - t_brake_s);
+        v = v1 + (v2 - v1) * u;
+      } else if (t_query > t_brake_e && t_query <= t_end) {
+        double u = (t_query - t_brake_e) / (t_end - t_brake_e);
+        v = v2 + (v3 - v2) * u;
+      } else if (t_query > t_end) {
+        v = v3;
+      }
+      return v;
+    };
+
+    const double v_lead_now = lead_speed_now(t);   // t is your sim time AFTER stepping
+
+    // propagate the *true/estimated* gap one step for the next MPC initial state
+    d_gap += mpcp.dt * (v_lead_now - v_ego_now);
+    if (d_gap < 0.0) d_gap = 0.0;                  // keep it sane/nonnegative
+
+    // feed as x0 for next MPC call
+    xk.d = d_gap;
+
+    std::cout << "d_gap = " << d_gap << " m\n";
+    std::cout << "v_ego = " << v_ego_now << " m/s\n";
+    std::cout << "v_lead = " << v_lead_now << " m/s\n";
+    std::cout << "----------------\n";
   }
 
   std::cout << "Log written to: " << cli.log_file << "\n";

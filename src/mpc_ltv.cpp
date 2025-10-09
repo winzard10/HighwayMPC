@@ -40,19 +40,30 @@ void LTV_MPC::angleWrap(double& a) {
 // Discretization: forward Euler
 // ------------------------------------------------------------------
 void LTV_MPC::buildLinearization(const MPCRef& ref) {
-    const int N = P.N;
-    lm_.A.assign(N, Eigen::Matrix<double,4,4>::Identity());
-    lm_.B.assign(N, Eigen::Matrix<double,4,2>::Zero());
-    lm_.c.assign(N, Eigen::Matrix<double,4,1>::Zero());
+    // const int N = P.N;
+    // lm_.A.assign(N, Eigen::Matrix<double,4,4>::Identity());
+    // lm_.B.assign(N, Eigen::Matrix<double,4,2>::Zero());
+    // lm_.c.assign(N, Eigen::Matrix<double,4,1>::Zero());
+
+    const int N  = P.N;
+    const int nx = P.acc_enable ? 5 : 4;
+    const int nu = 2;
+    lm_.A.assign(N, Eigen::MatrixXd::Identity(nx, nx));
+    lm_.B.assign(N, Eigen::MatrixXd::Zero(nx, nu));
+    lm_.c.assign(N, Eigen::VectorXd::Zero(nx));
 
     for (int k = 0; k < N; ++k) {
         const int idx = std::min<int>(k, (int)ref.hp.size()-1);
         const double vref = (idx >= 0) ? ref.hp[idx].v_ref : 0.0;
         const double kap  = (idx >= 0) ? ref.hp[idx].kappa : 0.0;
 
-        Eigen::Matrix<double,4,4> A = Eigen::Matrix<double,4,4>::Zero();
-        Eigen::Matrix<double,4,2> B = Eigen::Matrix<double,4,2>::Zero();
-        Eigen::Matrix<double,4,1> d = Eigen::Matrix<double,4,1>::Zero();
+        // Eigen::Matrix<double,4,4> A = Eigen::Matrix<double,4,4>::Zero();
+        // Eigen::Matrix<double,4,2> B = Eigen::Matrix<double,4,2>::Zero();
+        // Eigen::Matrix<double,4,1> d = Eigen::Matrix<double,4,1>::Zero();
+
+        Eigen::MatrixXd A = Eigen::MatrixXd::Zero(nx, nx);
+        Eigen::MatrixXd B = Eigen::MatrixXd::Zero(nx, nu);
+        Eigen::VectorXd d = Eigen::VectorXd::Zero(nx);
 
         A(0,1) = vref;            // ey_dot ≈ v*epsi
         A(1,3) = vref / P.L;      // ∂epsi_dot/∂delta
@@ -63,10 +74,63 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
 
         d(1)   = -vref * kap;     // affine term from -v*kappa
 
+        // ---- ACC gap dynamics (Eq. (2) in the paper) ----
+        if (P.acc_enable) {
+                const int id_d = 4;              // state index for gap
+                A(id_d,2) = -1.0;                // \dot d = v_obj - v
+                // B(row,id) = 0
+                const double vobj = (ref.v_obj.size() > (size_t)k) ? ref.v_obj[k] : vref;
+                d(id_d) = vobj;                  // affine part
+            }
+
+        // if (P.acc_enable) {
+        //     const int id_d = 4;
+        
+        //     double epsi_nom = (ref.epsi_nom.size() > (size_t)k) ? ref.epsi_nom[k] : 0.0;
+        //     const double cos_epsi = std::cos(epsi_nom);
+        //     const double sin_epsi = std::sin(epsi_nom);
+
+        //     // gap dynamics
+        //     A(id_d,2) = -cos_epsi;
+        //     A(id_d,1) = vref * sin_epsi;
+        //     const double vobj = (ref.v_obj.size() > (size_t)k) ? ref.v_obj[k] : vref;
+        //     d(id_d)   = vobj;
+
+        //     if (k == 0) std::cout << "k=" << k << " epsi_nom=" << epsi_nom << " A2=" << -cos_epsi << " A1=" << vref*sin_epsi << " d=" << vobj - vref * cos_epsi << std::endl;
+        // }
+
+        // if (P.acc_enable) {
+        //     const int id_d = 4;
+        //     const double epsi_nom = (ref.epsi_nom.size() > (size_t)k) ? ref.epsi_nom[k] : 0.0;
+        //     const double cos_e = std::cos(epsi_nom);
+        //     const double sin_e = std::sin(epsi_nom);
+        //     const double vref  = (idx >= 0) ? ref.hp[idx].v_ref : 0.0;
+        //     const double vobj  = (ref.v_obj.size() > (size_t)k) ? ref.v_obj[k] : vref;
+          
+        //     A(id_d,2) = -cos_e;               // ∂/∂v at nominal
+        //     A(id_d,1) =  vref * sin_e;        // ∂/∂epsi at nominal (absolute states)
+        //     d(id_d)   =  vobj - vref * sin_e * epsi_nom;  // affine f(x_nom) - A x_nom
+        //   }
+        
+
         // Discretize
-        Eigen::Matrix<double,4,4> Ad = Eigen::Matrix<double,4,4>::Identity() + P.dt * A;
-        Eigen::Matrix<double,4,2> Bd = P.dt * B;
-        Eigen::Matrix<double,4,1> cd = P.dt * d;
+        // Eigen::Matrix<double,4,4> Ad = Eigen::Matrix<double,4,4>::Identity() + P.dt * A;
+        // Eigen::Matrix<double,4,2> Bd = P.dt * B;
+        // Eigen::Matrix<double,4,1> cd = P.dt * d;
+
+        // Eigen::MatrixXd Ad = Eigen::MatrixXd::Identity(nx, nx) + P.dt * A;
+        // Eigen::MatrixXd Bd = P.dt * B;
+        // Eigen::VectorXd cd = P.dt * d;
+
+        // robust discretization (Tustin / bilinear)
+        Eigen::MatrixXd I  = Eigen::MatrixXd::Identity(nx, nx);
+        Eigen::MatrixXd M1 = I - 0.5 * P.dt * A;
+        Eigen::MatrixXd M2 = I + 0.5 * P.dt * A;
+
+        Eigen::PartialPivLU<Eigen::MatrixXd> lu(M1);
+        Eigen::MatrixXd Ad = lu.solve(M2);
+        Eigen::MatrixXd Bd = lu.solve(P.dt * B);
+        Eigen::VectorXd cd = lu.solve(P.dt * d);
 
         lm_.A[k] = Ad;
         lm_.B[k] = Bd;
@@ -102,9 +166,12 @@ void LTV_MPC::setCorridorBounds(const std::vector<double>& lo,
 // Uses triplet assembly (no sparse block assignment).
 // ------------------------------------------------------------------
 MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
-    const int nx = 4;   // [ey, epsi, v, delta]
+    // const int nx = 4;   // [ey, epsi, v, delta]
+    const int nx = P.acc_enable ? 5 : 4;   // [ey, epsi, v, delta, (d)]
     const int nu = 2;   // [a, ddelta]
     const int N  = P.N;
+    const int id_ey = 0, id_epsi = 1, id_v = 2, id_delta = 3;
+    const int id_d  = P.acc_enable ? 4 : -1;
 
     const int NX = (N+1)*nx;
     const int NU = N*nu;
@@ -235,6 +302,10 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     beq(row_x0(2)) = x0.v;    Aeqt.emplace_back(row_x0(2), idx_x(0,2), 1.0);
     beq(row_x0(3)) = x0.delta;Aeqt.emplace_back(row_x0(3), idx_x(0,3), 1.0);
 
+    if (P.acc_enable) {
+        beq(row_x0(4)) = x0.d; Aeqt.emplace_back(row_x0(4), idx_x(0,id_d), 1.0);
+    }
+
     // Inequalities: input bounds, delta bounds, v bounds, ey corridor
     std::vector<Triplet<double>> Aint;
     std::vector<double> lin_v, uin_v;
@@ -272,6 +343,24 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     for (int k=0; k<=N; ++k){
         push_row_le(row, idx_x(k,3), 1.0, -P.delta_max, P.delta_max); ++row;
     }
+
+    // Gap lower bound d >= 0 (optional but nice to keep feasibility)
+    if (P.acc_enable){
+        for (int k=0; k<=N; ++k){
+            push_row_le(row, idx_x(k,id_d), 1.0, 0.0, +OSQP_INFTY); ++row;
+        }
+        // ACC safety: d_k - tau * v_k >= d_min  (only if there's a lead at step k)
+        for (int k=0; k<N; ++k){
+            const bool has = (ref.has_obj.size() > (size_t)k) ? (ref.has_obj[k]!=0) : false;
+            if (!has) continue;
+            // Aineq[row, id_d] = +1, Aineq[row, id_v] = -tau
+            Aint.emplace_back(row, idx_x(k,id_d),  +1.0);
+            Aint.emplace_back(row, idx_x(k,id_v),  -P.acc_tau);
+            lin_v.push_back(P.acc_dmin);
+            uin_v.push_back(+OSQP_INFTY);
+            ++row;
+        }
+        }
 
     // Build A, l, u from triplets (no sparse blocks)
     const int meq = (int)beq.size();

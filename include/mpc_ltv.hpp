@@ -36,6 +36,11 @@ struct MPCParams {
     double ey_lo_max = -3.0;
 
     double ey_max = 1.8;  // fallback if no corridor provided
+
+    // ===== ACC options =====
+    bool   acc_enable{true};   // add 5th state (gap) and constraints
+    double acc_tau{1.4};       // [s] time headway
+    double acc_dmin{5.0};      // [m] standstill gap (a.k.a. jam distance)
 };
 
 // Preview point used by your sim
@@ -49,6 +54,12 @@ struct MPCRef {
     std::vector<PreviewPoint> hp;  // length N (or >= N)
     std::vector<double> ey_ref;      // size N+1 (state at k=0..N)
     double ey_ref_N{0.0};            // terminal, if you prefer separate
+
+    // Lead object profile (size N). If has_obj[k]==false we skip the ACC constraint at k.
+    std::vector<double> v_obj;
+    std::vector<uint8_t> has_obj;
+
+    std::vector<double> epsi_nom;
 };
 
 // State / Input / Output
@@ -57,6 +68,8 @@ struct MPCState {
     double epsi  = 0.0;   // heading error [rad]
     double v     = 0.0;   // speed [m/s]
     double delta = 0.0;   // steering angle [rad]
+
+    double d{1e6};   // longitudinal gap [m] (only used when acc_enable=true)
 };
 
 struct MPCControl {
@@ -104,11 +117,15 @@ public:
 private:
     MPCParams P;
 
-    struct LinModel {
-        std::vector<Eigen::Matrix<double,4,4>> A;  // ey, epsi, v, delta
-        std::vector<Eigen::Matrix<double,4,2>> B;  // a, ddelta
-        std::vector<Eigen::Matrix<double,4,1>> c;  // affine
-    } lm_;
+    // struct LinModel {
+    //     std::vector<Eigen::Matrix<double,4,4>> A;  // ey, epsi, v, delta
+    //     std::vector<Eigen::Matrix<double,4,2>> B;  // a, ddelta
+    //     std::vector<Eigen::Matrix<double,4,1>> c;  // affine
+    // } lm_;
+
+    struct LinModel { std::vector<Eigen::MatrixXd> A;
+                    std::vector<Eigen::MatrixXd> B;
+                    std::vector<Eigen::VectorXd> c; } lm_;
 
     struct Nominal {
         std::vector<MPCState>        x;   // N+1
