@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
   }
   log << std::fixed << std::setprecision(6);
   log << "t,s,x,y,psi,v,delta,a_cmd,ddelta_cmd,ey,epsi,dv,"
-         "v_ref,x_ref,y_ref,psi_ref,alpha,dmin\n";
+         "v_ref,x_ref,y_ref,psi_ref,alpha,dmin,v_lead,d_gap\n";
 
   // --- Simulation loop ---
   const int steps = static_cast<int>(cli.T / vp.dt);
@@ -331,15 +331,6 @@ int main(int argc, char** argv) {
 
     mpc.setCorridorBounds(cor.lo, cor.up);
 
-    // std::vector<double> epsi_nom(mpcp.N);
-    // for (int k = 0; k < mpcp.N - 1; ++k) {
-    //     // double ds  = std::max(1e-3, s_grid[k+1] - s_grid[k]);
-    //     // double dey = cor.ey_ref[k+1] - cor.ey_ref[k];
-    //     epsi_nom[k] = epsi;  // nominal heading deviation from centerline
-    // }
-    // epsi_nom.back() = epsi_nom[mpcp.N - 2];  // copy last value
-    // pref.epsi_nom = epsi_nom;
-
     // --- Synthetic lead profile for ACC (no world obstacle needed) ---
     pref.v_obj.resize(mpcp.N);
     pref.has_obj.resize(mpcp.N);
@@ -347,7 +338,7 @@ int main(int argc, char** argv) {
     // Example: start 30 m ahead, lead cruises 22 m/s, then brakes to 10 m/s at t=8–12 s
     const double v1        = 33.0;      // cruise
     const double v2        = 20.0;      // after braking
-    const double v3        = 33.0;      // lead car accelarates back to v3
+    const double v3        = 28.0;      // lead car accelarates back to v3
     const double t_brake_s = 10.0, t_brake_e = 20.0, t_end = 30.0;
 
     for (int k = 0; k < mpcp.N; ++k) {
@@ -384,14 +375,6 @@ int main(int argc, char** argv) {
     if (!std::isfinite(dmin))
       dmin = std::numeric_limits<double>::quiet_NaN();
 
-    // --- Log ---
-    log << t << "," << projC.s_proj << "," << st.x << "," << st.y << ","
-        << st.psi << "," << st.v << "," << st.delta << ","
-        << u_mpc.a << "," << u_mpc.ddelta << ","
-        << ey << "," << epsi << "," << dv << ","
-        << cref.v_ref << "," << x_ref << "," << y_ref << "," << psi_ref << ","
-        << alpha << "," << dmin << "\n";
-
     // --- Advance vehicle dynamics ---
     const Control u_cmd{u_mpc.a, u_mpc.ddelta};
     st = stepVehicle(st, u_cmd, vp, lim);
@@ -417,7 +400,7 @@ int main(int argc, char** argv) {
       return v;
     };
 
-    const double v_lead_now = lead_speed_now(t);   // t is your sim time AFTER stepping
+    double v_lead_now = lead_speed_now(t);   // t is your sim time AFTER stepping
 
     // propagate the *true/estimated* gap one step for the next MPC initial state
     d_gap += mpcp.dt * (v_lead_now - v_ego_now);
@@ -430,6 +413,17 @@ int main(int argc, char** argv) {
     std::cout << "v_ego = " << v_ego_now << " m/s\n";
     std::cout << "v_lead = " << v_lead_now << " m/s\n";
     std::cout << "----------------\n";
+
+    if (!std::isfinite(v_lead_now))
+      v_lead_now = std::numeric_limits<double>::quiet_NaN();
+
+    // --- Log ---
+    log << t << "," << projC.s_proj << "," << st.x << "," << st.y << ","
+        << st.psi << "," << st.v << "," << st.delta << ","
+        << u_mpc.a << "," << u_mpc.ddelta << ","
+        << ey << "," << epsi << "," << dv << ","
+        << cref.v_ref << "," << x_ref << "," << y_ref << "," << psi_ref << ","
+        << alpha << "," << dmin << "," << v_lead_now << "," << d_gap << "\n";
   }
 
   std::cout << "Log written to: " << cli.log_file << "\n";

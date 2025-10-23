@@ -53,6 +53,8 @@ psi = df["psi"].values if "psi" in df.columns else None
 psi_ref = df["psi_ref"].values if "psi_ref" in df.columns else None
 alpha = df["alpha"].values if "alpha" in df.columns else None
 dmin = df["dmin"].values if "dmin" in df.columns else None
+v_lead = df["v_lead"].values if "v_lead" in df.columns else None
+d_gap = df["d_gap"].values if "d_gap" in df.columns else None
 
 print(f"Loaded: {sim_path}")
 print(f"Duration: {t[-1]:.2f}s, samples: {len(t)}")
@@ -178,6 +180,7 @@ axs = axs.ravel()
 # 2) Speed tracking
 axs[0].plot(t, v_ref, label="v_ref")
 axs[0].plot(t, v, "--", label="v")
+axs[0].plot(t, v_lead, "--", label="v_lead")
 axs[0].set_title("Speed Tracking")
 axs[0].set_xlabel("Time [s]"); axs[0].set_ylabel("Speed [m/s]")
 axs[0].legend(); axs[0].grid(True)
@@ -212,10 +215,13 @@ if 'dmin' in locals() and dmin is not None:
     dmin_arr = np.asarray(dmin, dtype=float)
     good = np.isfinite(dmin_arr)
     if good.any():
-        axs[5].plot(t[good], dmin_arr[good])
-        axs[5].set_title("Minimum distance to obstacles")
+        axs[5].plot(t[good], dmin_arr[good], label="obstacles")
+        axs[5].set_title("Minimum distance to...")
         axs[5].set_xlabel("Time [s]"); axs[5].set_ylabel("d_min [m]")
         axs[5].grid(True)
+    if 'd_gap' in locals() and d_gap is not None:
+        axs[5].plot(t, d_gap, label="lead vehicle")
+        axs[5].legend()
 
 plt.tight_layout()
 plt.show()
