@@ -118,19 +118,19 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         // Eigen::Matrix<double,4,2> Bd = P.dt * B;
         // Eigen::Matrix<double,4,1> cd = P.dt * d;
 
-        // Eigen::MatrixXd Ad = Eigen::MatrixXd::Identity(nx, nx) + P.dt * A;
-        // Eigen::MatrixXd Bd = P.dt * B;
-        // Eigen::VectorXd cd = P.dt * d;
+        Eigen::MatrixXd Ad = Eigen::MatrixXd::Identity(nx, nx) + P.dt * A;
+        Eigen::MatrixXd Bd = P.dt * B;
+        Eigen::VectorXd cd = P.dt * d;
 
-        // robust discretization (Tustin / bilinear)
-        Eigen::MatrixXd I  = Eigen::MatrixXd::Identity(nx, nx);
-        Eigen::MatrixXd M1 = I - 0.5 * P.dt * A;
-        Eigen::MatrixXd M2 = I + 0.5 * P.dt * A;
+        // // robust discretization (Tustin / bilinear)
+        // Eigen::MatrixXd I  = Eigen::MatrixXd::Identity(nx, nx);
+        // Eigen::MatrixXd M1 = I - 0.5 * P.dt * A;
+        // Eigen::MatrixXd M2 = I + 0.5 * P.dt * A;
 
-        Eigen::PartialPivLU<Eigen::MatrixXd> lu(M1);
-        Eigen::MatrixXd Ad = lu.solve(M2);
-        Eigen::MatrixXd Bd = lu.solve(P.dt * B);
-        Eigen::VectorXd cd = lu.solve(P.dt * d);
+        // Eigen::PartialPivLU<Eigen::MatrixXd> lu(M1);
+        // Eigen::MatrixXd Ad = lu.solve(M2);
+        // Eigen::MatrixXd Bd = lu.solve(P.dt * B);
+        // Eigen::VectorXd cd = lu.solve(P.dt * d);
 
         lm_.A[k] = Ad;
         lm_.B[k] = Bd;

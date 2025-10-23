@@ -25,5 +25,5 @@ cd build
 cmake ..
 make
 cd ..
-./build/sim_lane_follow
+./build/sim_lane_follow --lane-from right --lane-to left --t-change 5 --T-change 4
 python3 viz_lane_follow.py

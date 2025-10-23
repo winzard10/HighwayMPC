@@ -1,1 +1,4 @@
 id,kind,x0,y0,vx,vy,radius,t_start,t_end
+1,static, 400.0, 2.5, 0,0, 1.0, 0.0, 1e9
+3,static, 1100.0, 1.5, 0,0, 1.0, 0.0, 1e9
+4,static, 600.0, 2.0, 0,0, 0.20, 0.0, 1e9
