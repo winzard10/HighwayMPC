@@ -39,7 +39,7 @@ x      = _need("x")
 y      = _need("y")
 v      = _need("v")
 delta  = _need("delta")
-a_cmd  = _need("a_cmd")
+R_cmd  = _need("R_cmd")
 ddcmd  = _need("ddelta_cmd")
 ey     = _need("ey")
 epsi   = _need("epsi")
@@ -47,6 +47,8 @@ dv     = _need("dv")
 v_ref  = _need("v_ref")
 x_ref  = _need("x_ref")
 y_ref  = _need("y_ref")
+F_fl   = _need("F_fl")
+F_rl   = _need("F_rl")
 
 # Optional columns
 psi = df["psi"].values if "psi" in df.columns else None
@@ -93,7 +95,7 @@ else:
     xr = yr = xl = yl = xcenter = ycenter = xlb = ylb = xrb = yrb = None
 
 # ---------- obstacles (optional) ----------
-obs_path = "data/obstacles.csv" if Path("data/obstacles.csv").exists() else            ("data/obstacles_example.csv" if Path("data/obstacles_example.csv").exists() else None)
+obs_path = "data/obstacles.csv" if Path("data/obstacles.csv").exists() else ("data/obstacles_example.csv" if Path("data/obstacles_example.csv").exists() else None)
 obstacles = None
 if obs_path is not None:
     try:
@@ -174,7 +176,7 @@ plt.tight_layout()
 
 
 # ---------- Figure 2: Other signals ----------
-fig2, axs = plt.subplots(3, 2, figsize=(12, 10))
+fig2, axs = plt.subplots(3, 3, figsize=(12, 10))
 axs = axs.ravel()
 
 # 2) Speed tracking
@@ -193,9 +195,9 @@ axs[1].set_xlabel("Time [s]"); axs[1].set_ylabel("Error")
 axs[1].legend(); axs[1].grid(True)
 
 # 4) Acceleration
-axs[2].plot(t, a_cmd)
-axs[2].set_title("Acceleration Command")
-axs[2].set_xlabel("Time [s]"); axs[2].set_ylabel("a [m/s²]")
+axs[2].plot(t, R_cmd)
+axs[2].set_title("Propulsion Command")
+axs[2].set_xlabel("Time [s]"); axs[2].set_ylabel("R [N]")
 axs[2].grid(True)
 
 # 5) Steering rate
@@ -222,6 +224,15 @@ if 'dmin' in locals() and dmin is not None:
     if 'd_gap' in locals() and d_gap is not None:
         axs[5].plot(t, d_gap, label="lead vehicle")
         axs[5].legend()
+
+# 8) Steering angle
+axs[6].plot(t, F_fl, label="Lateral forces at front")
+axs[6].plot(t, F_rl, label="Lateral forces at rear")
+axs[6].set_title("Tire force")
+axs[6].set_xlabel("Time [s]"); axs[6].set_ylabel("Tire force [N]")
+axs[6].legend()
+axs[6].grid(True)
+
 
 plt.tight_layout()
 plt.show()

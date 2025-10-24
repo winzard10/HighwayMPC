@@ -21,26 +21,41 @@ namespace fs = std::filesystem;
 
 // ---------- Basic types ----------
 struct VehicleParams {
-  double L{3.0};   // wheelbase [m]
   double track_w{1.7}; // track width [m]
+
+  // vehicle params (from your table)
+  double m      = 660.0;     // kg
+  double L      = 3.4;       // m
+  double d      = 1.6;       // m   (CM -> rear axle)
+  double a_ax   = L - d;   // m   (CM -> front axle)
+  double JG     = 450.0;     // kg m^2
+  double m0     = 185.09;    // kg   ( (JG + m d^2)/l^2 from table )
+  // aerodrag bundle k is ignored because Fwind = 0 for this task
+
   double dt{0.1};  // step [s]
 };
 
 struct Limits {
   double delta_max{0.5};   // ~28.6 deg
   double ddelta_max{0.7};  // rad/s
-  double a_min{-6.0}, a_max{2.5};
+  // double a_min{-6.0}, a_max{2.5};
+
+  // limits from the figure
+  double R_min  = -10000.0;  // N
+  double R_max  =  5500.0;   // N
+  double Ffl_max=   5000.0;  // N
+  double Frl_max=   5500.0;  // N
 };
 
 struct State {
   double s{0.0};   // along-road (we’ll log s_proj from project())
   double x{0.0}, y{0.0}, psi{0.0};
-  double v{25.0};
+  double v{15.0};
   double delta{0.0};
 };
 
 struct Control {
-  double a{0.0};       // accel [m/s^2]
+  double R{0.0};       // Propulsion force [N]
   double ddelta{0.0};  // steering rate [rad/s]
 };
 
@@ -86,20 +101,33 @@ static State stepVehicle(const State& s, const Control& u,
                          const VehicleParams& vp, const Limits& lim) {
   State n = s;
   const double dt = vp.dt;
-
-  const double a      = clamp(u.a,     lim.a_min, lim.a_max);
-  const double ddelta = clamp(u.ddelta, -lim.ddelta_max, lim.ddelta_max);
-
-  n.v     = std::max(0.0, s.v + a * dt);
-  n.s     = s.s + n.v * dt;
+  
+  // clamp inputs
+  const double R_cmd   = clamp(u.R,      lim.R_min, lim.R_max);
+  const double ddelta  = clamp(u.ddelta, -lim.ddelta_max, lim.ddelta_max);
+  
+  // advance steering
   n.delta = clamp(s.delta + ddelta * dt, -lim.delta_max, lim.delta_max);
-
-  // Kinematic bicycle forward Euler for pose (integrate for logging)
+  
+  // dynamic longitudinal: a_eff = vdot
+  const double c  = std::cos(s.delta);
+  const double s2 = 1.0 / (c * c);            // sec^2(delta)
+  const double t  = std::tan(s.delta);
+  const double denom = (vp.m + vp.m0 * t * t);
+  const double coupling = (vp.m0 * t * s2) * ddelta * s.v;  // m0*tan*sec^2*δ̇*v
+  const double a_eff = (R_cmd - coupling) / std::max(1e-9, denom);
+  
+  // integrate longitudinal state
+  n.v = std::max(0.0, s.v + a_eff * dt);
+  n.s = s.s + n.v * dt;
+  
+  // pose (keep kinematic pose integration for logging)
   n.x   = s.x + s.v * std::cos(s.psi) * dt;
   n.y   = s.y + s.v * std::sin(s.psi) * dt;
   n.psi = s.psi + (s.v / vp.L) * std::tan(s.delta) * dt;
-
+  
   return n;
+                          
 }
 
 // ---------- Lane pose helpers ----------
@@ -159,6 +187,25 @@ static void parseCLI(int argc, char** argv, CLI& cli) {
   }
 }
 
+static inline std::pair<double,double>
+compute_tire_forces(double v, double delta, double ddelta, double R,
+                    const VehicleParams& vp)
+{
+    const double c  = std::cos(delta);
+    const double s2 = 1.0 / (c * c);         // sec^2(delta)
+    const double t  = std::tan(delta);
+    const double denom  = (vp.m + vp.m0 * t * t);
+    const double common = (R * t) + (vp.m * v * ddelta * s2);  // Fwind=0
+
+    const double Ffl = (vp.m / vp.L) * t * (1.0 - vp.d / vp.L) * v * v
+                     - ((vp.m0 - vp.m * vp.d / vp.L) / std::max(1e-9, denom)) * common;
+
+    const double Frl = (1.0 / c) * ( (vp.m / (vp.L * vp.L)) * vp.d * v * v * t
+                     + (vp.m0 / std::max(1e-9, denom)) * common );
+
+    return {Ffl, Frl};
+}
+
 // ---------- Main ----------
 int main(int argc, char** argv) {
   // --- CLI ---
@@ -196,11 +243,15 @@ int main(int argc, char** argv) {
   double d_gap = 150.0;  // initial gap for ACC state
   LTV_MPC mpc(mpcp);
 
+  mpc.setVehicleParams(vp.m, vp.L, vp.d, vp.JG, vp.m0);
+  mpc.setLimits(lim.delta_max, lim.ddelta_max,
+                lim.R_min, lim.R_max, lim.Ffl_max, lim.Frl_max);
+
   // Initialize vehicle pose on chosen starting lane at s_min
   st.s = map.s_min();
   {
     LanePose p0 = lanePoseAt(map, st.s, cli.lane_from);
-    st = State{st.s, p0.x, p0.y, p0.psi, std::min(28.0, p0.v_ref), 0.0};
+    st = State{st.s, p0.x, p0.y, p0.psi, std::min(20.0, p0.v_ref), 0.0};
   }
 
   // --- Logging ---
@@ -210,8 +261,8 @@ int main(int argc, char** argv) {
     return 1;
   }
   log << std::fixed << std::setprecision(6);
-  log << "t,s,x,y,psi,v,delta,a_cmd,ddelta_cmd,ey,epsi,dv,"
-         "v_ref,x_ref,y_ref,psi_ref,alpha,dmin,v_lead,d_gap\n";
+  log << "t,s,x,y,psi,v,delta,R_cmd,ddelta_cmd,ey,epsi,dv,"
+         "v_ref,x_ref,y_ref,psi_ref,alpha,dmin,v_lead,d_gap,F_fl,F_rl\n";
 
   // --- Simulation loop ---
   const int steps = static_cast<int>(cli.T / vp.dt);
@@ -337,9 +388,9 @@ int main(int argc, char** argv) {
 
     // Example: start 30 m ahead, lead cruises 22 m/s, then brakes to 10 m/s at t=8–12 s
     const double v1        = 33.0;      // cruise
-    const double v2        = 20.0;      // after braking
-    const double v3        = 28.0;      // lead car accelarates back to v3
-    const double t_brake_s = 10.0, t_brake_e = 20.0, t_end = 30.0;
+    const double v2        = 28.0;      // after braking
+    const double v3        = 33.0;      // lead car accelarates back to v3
+    const double t_brake_s = 10.0, t_brake_e = 30.0, t_end = 50.0;
 
     for (int k = 0; k < mpcp.N; ++k) {
       const double tk = t + k*mpcp.dt;
@@ -362,7 +413,7 @@ int main(int argc, char** argv) {
 
     // --- Solve MPC ---
     MPCControl u_mpc = mpc.solve(xk, pref);
-    if (!u_mpc.ok) { u_mpc.a = 0.0; u_mpc.ddelta = 0.0; }  // safe fallback
+    if (!u_mpc.ok) { u_mpc.R = 0.0; u_mpc.ddelta = 0.0; }  // safe fallback
 
     // --- Measure min distance to currently active obstacles (for logging) ---
     double dmin = std::numeric_limits<double>::infinity();
@@ -376,7 +427,18 @@ int main(int argc, char** argv) {
       dmin = std::numeric_limits<double>::quiet_NaN();
 
     // --- Advance vehicle dynamics ---
-    const Control u_cmd{u_mpc.a, u_mpc.ddelta};
+    const Control u_cmd{u_mpc.R, u_mpc.ddelta};
+
+    // clamp like the plant does
+    const double R_applied   = clamp(u_cmd.R,    lim.R_min, lim.R_max);
+    const double ddel_applied= clamp(u_cmd.ddelta, -lim.ddelta_max, lim.ddelta_max);
+
+    // compute forces at the CURRENT state with the inputs you’ll apply
+    auto [Ffl_now, Frl_now] = compute_tire_forces(st.v, st.delta, ddel_applied, R_applied, vp);
+
+    // (optional) print
+    std::cout << "Ffl=" << Ffl_now << " N,  Frl=" << Frl_now << " N\n";
+
     st = stepVehicle(st, u_cmd, vp, lim);
 
     // Stop if we reach end of map
@@ -420,10 +482,10 @@ int main(int argc, char** argv) {
     // --- Log ---
     log << t << "," << projC.s_proj << "," << st.x << "," << st.y << ","
         << st.psi << "," << st.v << "," << st.delta << ","
-        << u_mpc.a << "," << u_mpc.ddelta << ","
+        << u_mpc.R << "," << u_mpc.ddelta << ","
         << ey << "," << epsi << "," << dv << ","
         << cref.v_ref << "," << x_ref << "," << y_ref << "," << psi_ref << ","
-        << alpha << "," << dmin << "," << v_lead_now << "," << d_gap << "\n";
+        << alpha << "," << dmin << "," << v_lead_now << "," << d_gap << "," << Ffl_now << "," << Frl_now << "\n";
   }
 
   std::cout << "Log written to: " << cli.log_file << "\n";

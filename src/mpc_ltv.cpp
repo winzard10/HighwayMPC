@@ -30,6 +30,20 @@ void LTV_MPC::angleWrap(double& a) {
     while (a >    M_PI) a -= 2.0 * M_PI;
 }
 
+void LTV_MPC::setVehicleParams(double m, double L, double d, double JG, double m0) {
+    m_ = m; L_ = L; d_ = d; JG_ = JG; m0_ = m0;
+    P.L = L_;                // keep heading kinematics consistent
+  }
+  
+void LTV_MPC::setLimits(double delta_max, double ddelta_max,
+                        double R_min, double R_max,
+                        double Ffl_max, double Frl_max) {
+    delta_max_ = delta_max;
+    ddelta_max_ = ddelta_max;
+    Rmin_ = R_min; Rmax_ = R_max;
+    Ffl_max_ = Ffl_max; Frl_max_ = Frl_max;
+}
+
 // ------------------------------------------------------------------
 // buildLinearization: simple kinematic bicycle linearization
 // States: [ey, epsi, v, delta], Inputs: [a, ddelta]
@@ -47,41 +61,61 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
     lm_.B.assign(N, Eigen::MatrixXd::Zero(nx, nu));
     lm_.c.assign(N, Eigen::VectorXd::Zero(nx));
 
+    // helper to compute f = vdot given state and inputs (Fwind=0)
+    auto vdot = [&](double v, double delta, double ddelta, double R){
+        const double c  = std::cos(delta);
+        const double s2 = 1.0/(c*c);           // sec^2
+        const double t  = std::tan(delta);
+        const double denom = (m_ + m0_ * t*t);
+        const double coupling = (m0_ * t * s2) * ddelta * v; // Fwind = 0
+        return (R - coupling) / denom;                        // Eq.(6)
+      };
+
     for (int k = 0; k < N; ++k) {
-        const int idx = std::min<int>(k, (int)ref.hp.size()-1);
-        const double vref = (idx >= 0) ? ref.hp[idx].v_ref : 0.0;
-        const double kap  = (idx >= 0) ? ref.hp[idx].kappa : 0.0;
+        const int idx = std::min<int>(k,(int)ref.hp.size()-1);
+        const double vref = idx>=0 ? ref.hp[idx].v_ref : 0.0;
+        const double kap  = idx>=0 ? ref.hp[idx].kappa : 0.0;
+        const double deltaref = 0.0;              // you linearize around δ≈0 unless you have a ref
+        const double ddref    = 0.0;
+        const double Rref     = 0.0;
 
         Eigen::MatrixXd A = Eigen::MatrixXd::Zero(nx, nx);
-        Eigen::MatrixXd B = Eigen::MatrixXd::Zero(nx, nu);
+        Eigen::MatrixXd B = Eigen::MatrixXd::Zero(nx,  2);
         Eigen::VectorXd d = Eigen::VectorXd::Zero(nx);
 
-        A(0,1) = vref;            // ey_dot ≈ v*epsi
-        A(1,3) = vref / P.L;      // ∂epsi_dot/∂delta
-        A(1,2) = -kap;            // ∂epsi_dot/∂v (linearization at delta≈0)
+        // ey, epsi same as before
+        A(0,1) = vref;
+        A(1,3) = vref / P.L;
+        A(1,2) = -kap;
+        d(1)   = -vref * kap;
 
-        B(2,0) = 1.0;             // v_dot = a
-        B(3,1) = 1.0;             // delta_dot = ddelta
+        // -------- longitudinal row: finite-diff Jacobian wrt [v,delta] and inputs [R, ddelta]
+        const double eps = 1e-6;
+        const double f0  = vdot(vref, deltaref, ddref, Rref);
 
-        d(1)   = -vref * kap;     // affine term from -v*kappa
+        // ∂f/∂v
+        double fv = (vdot(vref+eps, deltaref, ddref, Rref)-f0)/eps;
+        // ∂f/∂δ
+        double fdel = (vdot(vref, deltaref+eps, ddref, Rref)-f0)/eps;
+        // ∂f/∂R
+        double fR = (vdot(vref, deltaref, ddref, Rref+eps)-f0)/eps;
+        // ∂f/∂(δdot)
+        double fdd = (vdot(vref, deltaref, ddref+eps, Rref)-f0)/eps;
 
-        // ---- ACC gap dynamics (Eq. (2) in the paper) ----
-        if (P.acc_enable) {
-                const int id_d = 4;              // state index for gap
-                A(id_d,2) = -1.0;                // \dot d = v_obj - v
-                // B(row,id) = 0
-                const double vobj = (ref.v_obj.size() > (size_t)k) ? ref.v_obj[k] : vref;
-                d(id_d) = vobj;                  // affine part
-            }
+        A(2,2) = fv;            // v row wrt v
+        A(2,3) = fdel;          // v row wrt delta
+        B(2,0) = fR;            // input 0 is R
+        B(2,1) = fdd;           // input 1 is ddelta
 
-        // Discretize
+        // delta_dot = ddelta  (same as before)
+        B(3,1) = 1.0;
+
+        // discretize (Euler)
         Eigen::MatrixXd Ad = Eigen::MatrixXd::Identity(nx, nx) + P.dt * A;
         Eigen::MatrixXd Bd = P.dt * B;
         Eigen::VectorXd cd = P.dt * d;
 
-        lm_.A[k] = Ad;
-        lm_.B[k] = Bd;
-        lm_.c[k] = cd;
+        lm_.A[k] = Ad; lm_.B[k] = Bd; lm_.c[k] = cd;
     }
 
     // Basic nominal trajectory (zeros except v nominal to last preview)
@@ -181,7 +215,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
         g(idx_x(k,2)) += -2.0 * P.wv * vref;
 
         // input effort
-        Ht.emplace_back(idx_u(k,0), idx_u(k,0), 2.0 * P.wa);
+        Ht.emplace_back(idx_u(k,0), idx_u(k,0), 2.0 * P.wR);
         Ht.emplace_back(idx_u(k,1), idx_u(k,1), 2.0 * P.wdd);
 
         // input slew (u_k - u_{k-1})^2
@@ -189,7 +223,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
             for (int j=0;j<nu;++j){
                 const int uk   = idx_u(k,j);
                 const int ukm1 = idx_u(k-1,j);
-                const double w = (j==0? P.wda : P.wddd);
+                const double w = (j==0? P.wdR : P.wddd);
                 Ht.emplace_back(uk,    uk,    2.0*w);
                 Ht.emplace_back(ukm1,  ukm1,  2.0*w);
                 Ht.emplace_back(uk,    ukm1, -2.0*w);
@@ -275,10 +309,13 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
 
     // input box
     for (int k=0; k<N; ++k){
-        // a_min <= a_k <= a_max
-        push_row_le(row, idx_u(k,0), 1.0, P.a_min, P.a_max); ++row;
-        // -ddelta_max <= ddelta_k <= ddelta_max
-        push_row_le(row, idx_u(k,1), 1.0, -P.ddelta_max, P.ddelta_max); ++row;
+        push_row_le(row, idx_u(k,0), 1.0, Rmin_, Rmax_);                 ++row; // R
+        push_row_le(row, idx_u(k,1), 1.0, -ddelta_max_, ddelta_max_);    ++row; // δ̇
+    }
+    
+    // steering angle bounds
+    for (int k=0; k<=N; ++k){
+        push_row_le(row, idx_x(k,3), 1.0, -delta_max_, delta_max_);      ++row; // δ
     }
 
     // v bounds (optional)
@@ -287,8 +324,89 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     }
 
     // delta bounds
-    for (int k=0; k<=N; ++k){
-        push_row_le(row, idx_x(k,3), 1.0, -P.delta_max, P.delta_max); ++row;
+    // for (int k=0; k<=N; ++k){
+    //     push_row_le(row, idx_x(k,3), 1.0, -P.delta_max, P.delta_max); ++row;
+    // }
+
+    // --- tire force linearized inequalities
+    auto force_pair = [&](double v, double delta, double ddelta, double R) {
+        const double c  = std::cos(delta);
+        const double s2 = 1.0 / (c * c);      // sec^2(delta)
+        const double t  = std::tan(delta);
+        const double denom  = (m_ + m0_ * t * t);
+        const double common = (R * t) + (m_ * v * ddelta * s2); // Fwind = 0
+    
+        // From the figure (Eq. 7), with Fwind = 0
+        const double Ffl = (m_ / L_) * t * (1.0 - d_ / L_) * v * v
+                         - ((m0_ - m_ * d_ / L_) / denom) * common;
+    
+        const double Frl = (1.0 / c) * ( (m_ / (L_ * L_)) * d_ * v * v * t
+                                       + (m0_ / denom) * common );
+    
+        return std::pair<double,double>(Ffl, Frl); // {front, rear}
+    };
+    
+    auto force_jac = [&](double v, double delta, double ddelta, double R) {
+        const double eps = 1e-6;
+        auto F0   = force_pair(v, delta, ddelta, R);
+        auto F_v  = force_pair(v + eps, delta, ddelta, R);
+        auto F_de = force_pair(v, delta + eps, ddelta, R);
+        auto F_dd = force_pair(v, delta, ddelta + eps, R);
+        auto F_R  = force_pair(v, delta, ddelta, R + eps);
+    
+        // rows: [front; rear], cols: [v, delta, ddelta, R]
+        Eigen::Matrix<double,2,4> J;
+        J(0,0) = (F_v.first   - F0.first  ) / eps;  J(1,0) = (F_v.second   - F0.second  ) / eps;
+        J(0,1) = (F_de.first  - F0.first  ) / eps;  J(1,1) = (F_de.second  - F0.second  ) / eps;
+        J(0,2) = (F_dd.first  - F0.first  ) / eps;  J(1,2) = (F_dd.second  - F0.second  ) / eps;
+        J(0,3) = (F_R.first   - F0.first  ) / eps;  J(1,3) = (F_R.second   - F0.second  ) / eps;
+    
+        return std::make_pair(F0, J);
+    };
+    
+    for (int k = 0; k < N; ++k) {
+        // linearize around the same reference you used in buildLinearization
+        const int idx = std::min<int>(k, (int)ref.hp.size() - 1);
+        const double vref = (idx >= 0) ? ref.hp[idx].v_ref : 0.0;
+        const double deltaref = 0.0;   // if you keep δ_nom = 0
+        const double ddref    = 0.0;
+        const double Rref     = 0.0;
+    
+        auto FJ = force_jac(vref, deltaref, ddref, Rref);
+        const double Ffl0 = FJ.first.first;      // front force at ref
+        const double Frl0 = FJ.first.second;     // rear  force at ref
+        const auto&  J    = FJ.second;           // 2x4 jacobian
+    
+        // helper to push one affine inequality: alpha*z <= beta
+        auto push_affine = [&](int which, double Fmax){
+            // which: 0 = front, 1 = rear
+            const double jv   = J(which, 0);
+            const double jdel = J(which, 1);
+            const double jdd  = J(which, 2);
+            const double jR   = J(which, 3);
+            const double F0   = (which == 0) ? Ffl0 : Frl0;
+    
+            // +Jv*v_k + Jdel*delta_k + Jdd*ddelta_k + JR*R_k <= Fmax - F0
+            Aint.emplace_back(row, idx_x(k, id_v),     jv);
+            Aint.emplace_back(row, idx_x(k, id_delta), jdel);
+            Aint.emplace_back(row, idx_u(k, 1),        jdd);
+            Aint.emplace_back(row, idx_u(k, 0),        jR);
+            lin_v.push_back(-OSQP_INFTY);
+            uin_v.push_back(Fmax - F0);
+            ++row;
+    
+            // and symmetric: -F(x,u) <= Fmax  → negate coeffs, RHS = Fmax + F0
+            Aint.emplace_back(row, idx_x(k, id_v),     -jv);
+            Aint.emplace_back(row, idx_x(k, id_delta), -jdel);
+            Aint.emplace_back(row, idx_u(k, 1),        -jdd);
+            Aint.emplace_back(row, idx_u(k, 0),        -jR);
+            lin_v.push_back(-OSQP_INFTY);
+            uin_v.push_back(Fmax + F0);
+            ++row;
+        };
+    
+        push_affine(0, Ffl_max_);  // front
+        push_affine(1, Frl_max_);  // rear
     }
 
     // Gap lower bound d >= 0 (optional but nice to keep feasibility)
@@ -348,7 +466,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
 
     Eigen::VectorXd z = solver.getSolution();
     MPCControl out;
-    out.a      = z(idx_u(0,0));
+    out.R      = z(idx_u(0,0));
     out.ddelta = z(idx_u(0,1));
     out.ok     = true;
     return out;

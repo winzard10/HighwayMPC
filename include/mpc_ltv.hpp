@@ -19,15 +19,15 @@ struct MPCParams {
     double wy    = 0.20;
     double wpsi  = 0.02;
     double wv    = 0.10;
-    double wa    = 0.05;
+    double wR    = 0.05e-12;
     double wdd   = 0.10;   // effort on ddelta
-    double wda   = 0.00;   // slew a     (u_k - u_{k-1})
+    double wdR   = 0.00;   // slew R    (u_k - u_{k-1})
     double wddd  = 0.00;   // slew ddelta
     double wyf   = 8.0;    // terminal ey
     double wpsif = 6.0;    // terminal epsi
 
     // bounds
-    double a_min = -5.0, a_max = 3.0;
+    // double a_min = -5.0, a_max = 3.0;
     double ddelta_max = 0.25;     // |steer rate| [rad/s]
     double delta_max  = 0.40;     // steering angle cap [rad]
     double v_min = 0.0,  v_max = 40.0;
@@ -73,7 +73,7 @@ struct MPCState {
 };
 
 struct MPCControl {
-    double a      = 0.0;  // accel [m/s^2]
+    double R      = 0.0;  // Propulsional force [N]
     double ddelta = 0.0;  // steering rate [rad/s]
     bool   ok     = false;
 };
@@ -83,10 +83,20 @@ struct MPCControl {
 // ---------------------------------
 class LTV_MPC {
 public:
-    explicit LTV_MPC(const MPCParams& p): P(p) {
-        nom_.x.resize(P.N + 1);
-        nom_.u.resize(P.N);
-    }
+    // explicit LTV_MPC(const MPCParams& p): P(p) {
+    //     nom_.x.resize(P.N + 1);
+    //     nom_.u.resize(P.N);
+    // }
+
+    explicit LTV_MPC(const MPCParams& p) : P(p) {nom_.x.resize(P.N + 1); nom_.u.resize(P.N);}
+
+    // Physics from sim.VehicleParams
+    void setVehicleParams(double m, double L, double d, double JG, double m0);
+
+    // Actuator/tire limits from sim.Limits
+    void setLimits(double delta_max, double ddelta_max,
+                    double R_min, double R_max,
+                    double Ffl_max, double Frl_max);
 
     void setObstacleConstraints(std::optional<MPCObsSet> s) { obs_ = std::move(s); }
 
@@ -122,6 +132,14 @@ private:
     //     std::vector<Eigen::Matrix<double,4,2>> B;  // a, ddelta
     //     std::vector<Eigen::Matrix<double,4,1>> c;  // affine
     // } lm_;
+
+    // --- vehicle numbers (from VehicleParams) ---
+    double m_{660.0}, L_{3.4}, d_{1.6}, JG_{450.0}, m0_{185.09};
+
+    // --- limits (from Limits) ---
+    double delta_max_{0.5}, ddelta_max_{0.7};
+    double Rmin_{-10000.0}, Rmax_{5500.0};
+    double Ffl_max_{5000.0}, Frl_max_{5500.0};
 
     struct LinModel { std::vector<Eigen::MatrixXd> A;
                     std::vector<Eigen::MatrixXd> B;
