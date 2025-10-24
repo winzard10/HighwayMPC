@@ -18,8 +18,8 @@ struct MPCParams {
     // weights
     double wy    = 0.20;
     double wpsi  = 0.02;
-    double wv    = 0.10;
-    double wR    = 0.05e-12;
+    double wv    = 0.25;
+    double wR    = 0.05e-6;
     double wdd   = 0.10;   // effort on ddelta
     double wdR   = 0.00;   // slew R    (u_k - u_{k-1})
     double wddd  = 0.00;   // slew ddelta

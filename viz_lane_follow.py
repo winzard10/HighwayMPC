@@ -216,9 +216,9 @@ axs[4].grid(True)
 if 'dmin' in locals() and dmin is not None:
     dmin_arr = np.asarray(dmin, dtype=float)
     good = np.isfinite(dmin_arr)
+    axs[5].set_title("Minimum distance to...")
     if good.any():
         axs[5].plot(t[good], dmin_arr[good], label="obstacles")
-        axs[5].set_title("Minimum distance to...")
         axs[5].set_xlabel("Time [s]"); axs[5].set_ylabel("d_min [m]")
         axs[5].grid(True)
     if 'd_gap' in locals() and d_gap is not None:
