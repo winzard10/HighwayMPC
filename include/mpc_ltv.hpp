@@ -66,7 +66,9 @@ struct MPCRef {
 struct MPCState {
     double ey    = 0.0;   // lateral error [m]
     double epsi  = 0.0;   // heading error [rad]
-    double v     = 0.0;   // speed [m/s]
+    double vx     = 0.0;   // longitudinal speed [m/s]
+    double vy    = 0.0;   // lateral speed [m/s]
+    double dpsi     = 0.0;   // yaw rate [rad/s]
     double delta = 0.0;   // steering angle [rad]
 
     double d{1e6};   // longitudinal gap [m] (only used when acc_enable=true)
@@ -118,6 +120,18 @@ public:
         return solveQP(x0, ref);
     }
 
+    // tire model
+
+    struct TireParams {
+        // Simple “pure lateral” Magic Formula form where D = mu * Fz.
+        // If you later want full D(Fz), B(Fz), E(Fz), keep these as functions.
+        double Bf{10.0}, Cf{1.3}, Ef{0.97}, muf{1.0};  // front
+        double Br{12.0}, Cr{1.3}, Er{1.00}, mur{1.0};  // rear
+    };
+
+    // in class LTV_MPC public:
+    void setTireParams(const TireParams& tp) { tires_ = tp; }
+
     // helpers
     static void angleWrap(double& a);
 
@@ -126,6 +140,7 @@ public:
 
 private:
     MPCParams P;
+    TireParams tires_;
 
     // struct LinModel {
     //     std::vector<Eigen::Matrix<double,4,4>> A;  // ey, epsi, v, delta
@@ -134,7 +149,7 @@ private:
     // } lm_;
 
     // --- vehicle numbers (from VehicleParams) ---
-    double m_{660.0}, L_{3.4}, d_{1.6}, JG_{450.0}, m0_{185.09};
+    double m_{660.0}, L_{3.4}, d_{1.6}, JG_{450.0}, m0_{185.09}; double Lf_, Lr_;
 
     // --- limits (from Limits) ---
     double delta_max_{0.5}, ddelta_max_{0.7};

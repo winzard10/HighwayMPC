@@ -33,6 +33,8 @@ void LTV_MPC::angleWrap(double& a) {
 void LTV_MPC::setVehicleParams(double m, double L, double d, double JG, double m0) {
     m_ = m; L_ = L; d_ = d; JG_ = JG; m0_ = m0;
     P.L = L_;                // keep heading kinematics consistent
+    Lf_ = L_ - d_;   // front axle distance
+    Lr_ = d_;        // rear axle distance
   }
   
 void LTV_MPC::setLimits(double delta_max, double ddelta_max,
@@ -43,6 +45,48 @@ void LTV_MPC::setLimits(double delta_max, double ddelta_max,
     Rmin_ = R_min; Rmax_ = R_max;
     Ffl_max_ = Ffl_max; Frl_max_ = Frl_max;
 }
+
+// ======================
+// Tire slip model helpers
+// ======================
+
+// ---- slip angle helpers (put in a shared header or at top of both files) ----
+static inline double clampAlpha(double a){
+    const double a_max = 0.6;            // ≈34°, safe for pure-lateral
+    return std::clamp(a, -a_max, a_max);
+}
+
+static inline double slipAngleFront(double vx, double vy, double dpsi,
+                                    double delta, double Lf)
+{
+    const double vx_eff = std::max(0.5, vx);          // low-speed guard
+    const double beta_f = std::atan((vy + Lf * dpsi) / vx_eff);
+    return clampAlpha(delta - beta_f);                // α_f opposes motion
+}
+
+static inline double slipAngleRear(double vx, double vy, double dpsi,
+                                   double Lr)
+{
+    const double vx_eff = std::max(0.5, vx);
+    const double beta_r = std::atan((vy - Lr * dpsi) / vx_eff);
+    return clampAlpha(-beta_r);
+}
+
+// Pure lateral Magic Formula (Pacejka 1996)
+static inline double pacejkaFy(double B,double C,double D,double E,double alpha){
+    // Fy = D * sin( C * atan( B*alpha - E*(B*alpha - atan(B*alpha)) ) )
+    const double x = B * alpha;
+    return D * std::sin( C * std::atan( x - E*(x - std::atan(x)) ) );
+}
+
+static inline void static_axle_loads(double m, double g, double L, double d,
+    double& Fzf0, double& Fzr0){
+    const double Lf = L - d;   // CoM -> front axle
+    const double Lr = d;       // CoM -> rear axle
+    Fzf0 = m * g * (Lr / L);   // front static load
+    Fzr0 = m * g * (Lf / L);   // rear  static load
+}
+
 
 // ------------------------------------------------------------------
 // buildLinearization: simple kinematic bicycle linearization
@@ -55,81 +99,158 @@ void LTV_MPC::setLimits(double delta_max, double ddelta_max,
 // ------------------------------------------------------------------
 void LTV_MPC::buildLinearization(const MPCRef& ref) {
     const int N  = P.N;
-    const int nx = P.acc_enable ? 5 : 4;
-    const int nu = 2;
+    const int nx = P.acc_enable ? 7 : 6;   // [ey, epsi, vx, vy, dpsi, delta, (d)]
+    const int nu = 2;                      // [R, ddelta]
+
     lm_.A.assign(N, Eigen::MatrixXd::Identity(nx, nx));
     lm_.B.assign(N, Eigen::MatrixXd::Zero(nx, nu));
     lm_.c.assign(N, Eigen::VectorXd::Zero(nx));
 
-    // helper to compute f = vdot given state and inputs (Fwind=0)
-    auto vdot = [&](double v, double delta, double ddelta, double R){
-        const double c  = std::cos(delta);
-        const double s2 = 1.0/(c*c);           // sec^2
-        const double t  = std::tan(delta);
-        const double denom = (m_ + m0_ * t*t);
-        const double coupling = (m0_ * t * s2) * ddelta * v; // Fwind = 0
-        return (R - coupling) / denom;                        // Eq.(6)
-      };
+    // ---- continuous-time dynamics f(x,u; ref_k) for pure lateral slip ----
+    auto f_dyn = [&](const Eigen::VectorXd& x,
+                     const Eigen::VectorXd& u,
+                     const MPCRef& ref_k) -> Eigen::VectorXd
+    {
+        const bool has_acc = P.acc_enable;
 
+        // unpack state
+        const double ey    = x(0);
+        const double epsi  = x(1);
+        double       vx    = x(2);
+        const double vy    = x(3);
+        const double dpsi  = x(4);
+        const double delta = x(5);
+        const double d_gap = has_acc ? x(6) : 0.0;   // (unused here)
+
+        // avoid division by ~0 in slip angles
+        vx = std::max(0.1, vx);
+
+        // inputs
+        const double R      = u(0);
+        const double ddelta = u(1);
+
+        // geometry
+        const double Lf = L_ - d_;
+        const double Lr = d_;
+
+        // tire params
+        const double Bf = tires_.Bf, Cf = tires_.Cf, Df = tires_.muf * 0.5 * m_ * 9.81 * (L_-d_) / L_; // rough Fz split
+        const double Br = tires_.Br, Cr = tires_.Cr, Dr = tires_.mur * 0.5 * m_ * 9.81 * (d_)   / L_;
+
+        // slip angles
+        const double alpha_f = slipAngleFront(vx, vy, dpsi, delta, Lf);
+        const double alpha_r = slipAngleRear (vx, vy, dpsi, Lr);
+
+        // lateral forces (pure lateral MF)
+        const double Fy_f = pacejkaFy(Bf, Cf, Df, tires_.Ef, alpha_f);
+        const double Fy_r = pacejkaFy(Br, Cr, Dr, tires_.Er, alpha_r);
+
+        // body accelerations (no aero drag here)
+        const double ax = (R - Fy_f * std::sin(delta)) / m_ + vy * dpsi;
+        const double ay = (Fy_f * std::cos(delta) + Fy_r) / m_ - vx * dpsi;
+
+        // curvature from preview
+        const double kappa = ref_k.hp[0].kappa;
+        // const double vref  = ref_k.hp[0].v_ref; // not needed inside f
+
+        Eigen::VectorXd dx = Eigen::VectorXd::Zero(has_acc ? 7 : 6);
+        dx(0) = vx * std::sin(epsi) + vy * std::cos(epsi);            // ey_dot
+        dx(1) = dpsi - kappa * vx;                                    // epsi_dot
+        dx(2) = ax;                                                   // vx_dot
+        dx(3) = ay;                                                   // vy_dot
+        dx(4) = (Lf * Fy_f * std::cos(delta) - Lr * Fy_r) / JG_;      // dpsi_dot
+        dx(5) = ddelta;                                               // delta_dot
+        if (has_acc) {
+            const double v_obj = ref_k.hp[0].v_ref;                   // reuse v_ref as lead speed input
+            dx(6) = v_obj - vx;                                       // d_gap_dot
+        }
+
+        // silence unuseds (informative to keep but not used numerically)
+        (void)ey; (void)d_gap;
+        return dx;
+    };
+
+    // ---- per-step linearization ----
     for (int k = 0; k < N; ++k) {
-        const int idx = std::min<int>(k,(int)ref.hp.size()-1);
-        const double vref = idx>=0 ? ref.hp[idx].v_ref : 0.0;
-        const double kap  = idx>=0 ? ref.hp[idx].kappa : 0.0;
-        const double deltaref = 0.0;              // you linearize around δ≈0 unless you have a ref
-        const double ddref    = 0.0;
-        const double Rref     = 0.0;
+        const int idx = std::min<int>(k, (int)ref.hp.size() - 1);
+
+        // nominal about which we linearize
+        Eigen::VectorXd x0(nx); x0.setZero();
+        Eigen::VectorXd u0(nu); u0.setZero();
+
+        // choose a simple nominal consistent with preview
+        x0(2) = std::max(0.0, ref.hp[idx].v_ref); // vx
+        x0(3) = 0.0;                               // vy
+        x0(4) = 0.0;                               // dpsi
+        x0(5) = 0.0;                               // delta
+        if (P.acc_enable) x0(6) = 0.0;            // gap
+
+        // make a 1-step ref view for f_dyn
+        MPCRef ref_k;
+        ref_k.hp.resize(1);
+        ref_k.hp[0] = ref.hp[idx];
+
+        // base vector field and numerical Jacobians
+        const Eigen::VectorXd f0 = f_dyn(x0, u0, ref_k);
 
         Eigen::MatrixXd A = Eigen::MatrixXd::Zero(nx, nx);
-        Eigen::MatrixXd B = Eigen::MatrixXd::Zero(nx,  2);
-        Eigen::VectorXd d = Eigen::VectorXd::Zero(nx);
+        Eigen::MatrixXd B = Eigen::MatrixXd::Zero(nx, nu);
+        Eigen::VectorXd c = Eigen::VectorXd::Zero(nx);
 
-        // ey, epsi same as before
-        A(0,1) = vref;
-        A(1,3) = vref / P.L;
-        A(1,2) = -kap;
-        d(1)   = -vref * kap;
-
-        // -------- longitudinal row: finite-diff Jacobian wrt [v,delta] and inputs [R, ddelta]
         const double eps = 1e-6;
-        const double f0  = vdot(vref, deltaref, ddref, Rref);
 
-        // ∂f/∂v
-        double fv = (vdot(vref+eps, deltaref, ddref, Rref)-f0)/eps;
-        // ∂f/∂δ
-        double fdel = (vdot(vref, deltaref+eps, ddref, Rref)-f0)/eps;
-        // ∂f/∂R
-        double fR = (vdot(vref, deltaref, ddref, Rref+eps)-f0)/eps;
-        // ∂f/∂(δdot)
-        double fdd = (vdot(vref, deltaref, ddref+eps, Rref)-f0)/eps;
+        // df/dx
+        for (int i = 0; i < nx; ++i) {
+            Eigen::VectorXd x_eps = x0; x_eps(i) += eps;
+            Eigen::VectorXd f_eps = f_dyn(x_eps, u0, ref_k);
+            A.col(i) = (f_eps - f0) / eps;
+        }
 
-        A(2,2) = fv;            // v row wrt v
-        A(2,3) = fdel;          // v row wrt delta
-        B(2,0) = fR;            // input 0 is R
-        B(2,1) = fdd;           // input 1 is ddelta
+        // df/du
+        for (int j = 0; j < nu; ++j) {
+            Eigen::VectorXd u_eps = u0; u_eps(j) += eps;
+            Eigen::VectorXd f_eps = f_dyn(x0, u_eps, ref_k);
+            B.col(j) = (f_eps - f0) / eps;
+        }
 
-        // delta_dot = ddelta  (same as before)
-        B(3,1) = 1.0;
+        // affine term: f(x) ≈ A(x-x0) + B(u-u0) + c  ⇒ c = f0 - A x0 - B u0
+        c = f0 - A * x0 - B * u0;
 
-        // discretize (Euler)
+        // forward Euler discretization
         Eigen::MatrixXd Ad = Eigen::MatrixXd::Identity(nx, nx) + P.dt * A;
         Eigen::MatrixXd Bd = P.dt * B;
-        Eigen::VectorXd cd = P.dt * d;
+        Eigen::VectorXd cd = P.dt * c;
 
-        lm_.A[k] = Ad; lm_.B[k] = Bd; lm_.c[k] = cd;
+        // explicit ACC row in discrete form (matches dx(6)=v_obj - vx)
+        if (P.acc_enable) {
+            const int id_vx = 2;
+            const int id_d  = 6;
+            const double vobj = (ref.v_obj.size() > (size_t)k) ? ref.v_obj[k] : ref.hp[idx].v_ref;
+            Ad(id_d, id_d) += 1.0;      // d_{k+1} depends on d_k
+            Ad(id_d, id_vx) += -P.dt;   // -vx_k
+            cd(id_d)        +=  P.dt * vobj;
+        }
+
+        lm_.A[k] = Ad;
+        lm_.B[k] = Bd;
+        lm_.c[k] = cd;
     }
 
-    // Basic nominal trajectory (zeros except v nominal to last preview)
+    // nominal containers (optional)
     nom_.x.resize(N+1);
     nom_.u.resize(N);
-    for (int k=0; k<=N; ++k) {
-        nom_.x[k].ey = 0.0;
+    for (int k = 0; k <= N; ++k) {
+        nom_.x[k].ey   = 0.0;
         nom_.x[k].epsi = 0.0;
-        nom_.x[k].v = (k < (int)ref.hp.size()) ? ref.hp[k].v_ref
-                                               : ref.hp.empty() ? 0.0 : ref.hp.back().v_ref;
-        nom_.x[k].delta = 0.0;
+        nom_.x[k].vx   = (k < (int)ref.hp.size()) ? ref.hp[k].v_ref : 0.0;
+        nom_.x[k].vy   = 0.0;
+        nom_.x[k].dpsi = 0.0;
+        nom_.x[k].delta= 0.0;
+        if (P.acc_enable) nom_.x[k].d = 0.0;
     }
-    for (int k=0; k<N; ++k) nom_.u[k].setZero();
+    for (int k = 0; k < N; ++k) nom_.u[k].setZero();
 }
+
 
 void LTV_MPC::setCorridorBounds(const std::vector<double>& lo,
     const std::vector<double>& up) {
@@ -147,12 +268,18 @@ void LTV_MPC::setCorridorBounds(const std::vector<double>& lo,
 // Uses triplet assembly (no sparse block assignment).
 // ------------------------------------------------------------------
 MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
-    // const int nx = 4;   // [ey, epsi, v, delta]
-    const int nx = P.acc_enable ? 5 : 4;   // [ey, epsi, v, delta, (d)]
-    const int nu = 2;   // [a, ddelta]
+    const int nx = P.acc_enable ? 7 : 6;   // [ey, epsi, vx, vy, dpsi, delta, (d)]
+    const int nu = 2;                      // [R, ddelta]
     const int N  = P.N;
-    const int id_ey = 0, id_epsi = 1, id_v = 2, id_delta = 3;
-    const int id_d  = P.acc_enable ? 4 : -1;
+
+    // canonical indices
+    const int id_ey    = 0;
+    const int id_epsi  = 1;
+    const int id_vx    = 2;
+    const int id_vy    = 3;
+    const int id_r     = 4;
+    const int id_delta = 5;
+    const int id_d     = P.acc_enable ? 6 : -1;
 
     const int NX = (N+1)*nx;
     const int NU = N*nu;
@@ -278,13 +405,15 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
         }
     }
     // initial condition x_0 = x0
-    beq(row_x0(0)) = x0.ey;   Aeqt.emplace_back(row_x0(0), idx_x(0,0), 1.0);
-    beq(row_x0(1)) = x0.epsi; Aeqt.emplace_back(row_x0(1), idx_x(0,1), 1.0);
-    beq(row_x0(2)) = x0.v;    Aeqt.emplace_back(row_x0(2), idx_x(0,2), 1.0);
-    beq(row_x0(3)) = x0.delta;Aeqt.emplace_back(row_x0(3), idx_x(0,3), 1.0);
-
+    beq(row_x0(id_ey))   = x0.ey;    Aeqt.emplace_back(row_x0(id_ey),   idx_x(0,id_ey),   1.0);
+    beq(row_x0(id_epsi)) = x0.epsi;  Aeqt.emplace_back(row_x0(id_epsi), idx_x(0,id_epsi), 1.0);
+    beq(row_x0(id_vx))   = x0.vx;    Aeqt.emplace_back(row_x0(id_vx),   idx_x(0,id_vx),   1.0);
+    beq(row_x0(id_vy))   = x0.vy;    Aeqt.emplace_back(row_x0(id_vy),   idx_x(0,id_vy),   1.0);
+    beq(row_x0(id_r))    = 0.0;      Aeqt.emplace_back(row_x0(id_r),    idx_x(0,id_r),    1.0);
+    beq(row_x0(id_delta))= x0.delta; Aeqt.emplace_back(row_x0(id_delta),idx_x(0,id_delta),1.0);
     if (P.acc_enable) {
-        beq(row_x0(4)) = x0.d; Aeqt.emplace_back(row_x0(4), idx_x(0,id_d), 1.0);
+        beq(row_x0(id_d)) = x0.d;
+        Aeqt.emplace_back(row_x0(id_d), idx_x(0,id_d), 1.0);
     }
 
     // Inequalities: input bounds, delta bounds, v bounds, ey corridor
@@ -346,86 +475,117 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
         return std::pair<double,double>(Ffl, Frl); // {front, rear}
     };
     
-    auto force_jac = [&](double v, double delta, double ddelta, double R) {
-        const double eps = 1e-6;
-        auto F0   = force_pair(v, delta, ddelta, R);
-        auto F_v  = force_pair(v + eps, delta, ddelta, R);
-        auto F_de = force_pair(v, delta + eps, ddelta, R);
-        auto F_dd = force_pair(v, delta, ddelta + eps, R);
-        auto F_R  = force_pair(v, delta, ddelta, R + eps);
+    // auto force_jac = [&](double v, double delta, double ddelta, double R) {
+    //     const double eps = 1e-6;
+    //     auto F0   = force_pair(v, delta, ddelta, R);
+    //     auto F_v  = force_pair(v + eps, delta, ddelta, R);
+    //     auto F_de = force_pair(v, delta + eps, ddelta, R);
+    //     auto F_dd = force_pair(v, delta, ddelta + eps, R);
+    //     auto F_R  = force_pair(v, delta, ddelta, R + eps);
     
-        // rows: [front; rear], cols: [v, delta, ddelta, R]
-        Eigen::Matrix<double,2,4> J;
-        J(0,0) = (F_v.first   - F0.first  ) / eps;  J(1,0) = (F_v.second   - F0.second  ) / eps;
-        J(0,1) = (F_de.first  - F0.first  ) / eps;  J(1,1) = (F_de.second  - F0.second  ) / eps;
-        J(0,2) = (F_dd.first  - F0.first  ) / eps;  J(1,2) = (F_dd.second  - F0.second  ) / eps;
-        J(0,3) = (F_R.first   - F0.first  ) / eps;  J(1,3) = (F_R.second   - F0.second  ) / eps;
+    //     // rows: [front; rear], cols: [v, delta, ddelta, R]
+    //     Eigen::Matrix<double,2,4> J;
+    //     J(0,0) = (F_v.first   - F0.first  ) / eps;  J(1,0) = (F_v.second   - F0.second  ) / eps;
+    //     J(0,1) = (F_de.first  - F0.first  ) / eps;  J(1,1) = (F_de.second  - F0.second  ) / eps;
+    //     J(0,2) = (F_dd.first  - F0.first  ) / eps;  J(1,2) = (F_dd.second  - F0.second  ) / eps;
+    //     J(0,3) = (F_R.first   - F0.first  ) / eps;  J(1,3) = (F_R.second   - F0.second  ) / eps;
     
-        return std::make_pair(F0, J);
-    };
+    //     return std::make_pair(F0, J);
+    // };
     
-    for (int k = 0; k < N; ++k) {
-        // linearize around the same reference you used in buildLinearization
-        const int idx = std::min<int>(k, (int)ref.hp.size() - 1);
+    // for (int k = 0; k < N; ++k) {
+    //     // linearize around the same reference you used in buildLinearization
+    //     const int idx = std::min<int>(k, (int)ref.hp.size() - 1);
+    //     const double vref = (idx >= 0) ? ref.hp[idx].v_ref : 0.0;
+    //     const double deltaref = 0.0;   // if you keep δ_nom = 0
+    //     const double ddref    = 0.0;
+    //     const double Rref     = 0.0;
+    
+    //     auto FJ = force_jac(vref, deltaref, ddref, Rref);
+    //     const double Ffl0 = FJ.first.first;      // front force at ref
+    //     const double Frl0 = FJ.first.second;     // rear  force at ref
+    //     const auto&  J    = FJ.second;           // 2x4 jacobian
+    
+    //     // helper to push one affine inequality: alpha*z <= beta
+    //     auto push_affine = [&](int which, double Fmax){
+    //         // which: 0 = front, 1 = rear
+    //         const double jv   = J(which, 0);
+    //         const double jdel = J(which, 1);
+    //         const double jdd  = J(which, 2);
+    //         const double jR   = J(which, 3);
+    //         const double F0   = (which == 0) ? Ffl0 : Frl0;
+    
+    //         // +Jv*v_k + Jdel*delta_k + Jdd*ddelta_k + JR*R_k <= Fmax - F0
+    //         Aint.emplace_back(row, idx_x(k, id_v),     jv);
+    //         Aint.emplace_back(row, idx_x(k, id_delta), jdel);
+    //         Aint.emplace_back(row, idx_u(k, 1),        jdd);
+    //         Aint.emplace_back(row, idx_u(k, 0),        jR);
+    //         lin_v.push_back(-OSQP_INFTY);
+    //         uin_v.push_back(Fmax - F0);
+    //         ++row;
+    
+    //         // and symmetric: -F(x,u) <= Fmax  → negate coeffs, RHS = Fmax + F0
+    //         Aint.emplace_back(row, idx_x(k, id_v),     -jv);
+    //         Aint.emplace_back(row, idx_x(k, id_delta), -jdel);
+    //         Aint.emplace_back(row, idx_u(k, 1),        -jdd);
+    //         Aint.emplace_back(row, idx_u(k, 0),        -jR);
+    //         lin_v.push_back(-OSQP_INFTY);
+    //         uin_v.push_back(Fmax + F0);
+    //         ++row;
+    //     };
+    
+    //     push_affine(0, Ffl_max_);  // front
+    //     push_affine(1, Frl_max_);  // rear
+    // }
+
+    const double g_acc = 9.81;
+    double Fzf0, Fzr0;
+    static_axle_loads(m_, g_acc, L_, d_, Fzf0, Fzr0);
+
+    // Per-axle *peak* pure-lateral capacity (sum over two wheels on an axle).
+    // D_f = mu_f * Fz_f0 (per wheel) → front axle peak ≈ 2 * D_f
+    // Ditto for the rear. If you have wheel-wise Fz, change the 2× factor.
+    const double Fy_front_peak = 2.0 * (tires_.muf * Fzf0);
+    const double Fy_rear_peak  = 2.0 * (tires_.mur * Fzr0);
+
+    for (int k = 0; k < N; ++k){
+        const int idx = std::min<int>(k, (int)ref.hp.size()-1);
         const double vref = (idx >= 0) ? ref.hp[idx].v_ref : 0.0;
-        const double deltaref = 0.0;   // if you keep δ_nom = 0
-        const double ddref    = 0.0;
-        const double Rref     = 0.0;
-    
-        auto FJ = force_jac(vref, deltaref, ddref, Rref);
-        const double Ffl0 = FJ.first.first;      // front force at ref
-        const double Frl0 = FJ.first.second;     // rear  force at ref
-        const auto&  J    = FJ.second;           // 2x4 jacobian
-    
-        // helper to push one affine inequality: alpha*z <= beta
-        auto push_affine = [&](int which, double Fmax){
-            // which: 0 = front, 1 = rear
-            const double jv   = J(which, 0);
-            const double jdel = J(which, 1);
-            const double jdd  = J(which, 2);
-            const double jR   = J(which, 3);
-            const double F0   = (which == 0) ? Ffl0 : Frl0;
-    
-            // +Jv*v_k + Jdel*delta_k + Jdd*ddelta_k + JR*R_k <= Fmax - F0
-            Aint.emplace_back(row, idx_x(k, id_v),     jv);
-            Aint.emplace_back(row, idx_x(k, id_delta), jdel);
-            Aint.emplace_back(row, idx_u(k, 1),        jdd);
-            Aint.emplace_back(row, idx_u(k, 0),        jR);
-            lin_v.push_back(-OSQP_INFTY);
-            uin_v.push_back(Fmax - F0);
-            ++row;
-    
-            // and symmetric: -F(x,u) <= Fmax  → negate coeffs, RHS = Fmax + F0
-            Aint.emplace_back(row, idx_x(k, id_v),     -jv);
-            Aint.emplace_back(row, idx_x(k, id_delta), -jdel);
-            Aint.emplace_back(row, idx_u(k, 1),        -jdd);
-            Aint.emplace_back(row, idx_u(k, 0),        -jR);
-            lin_v.push_back(-OSQP_INFTY);
-            uin_v.push_back(Fmax + F0);
-            ++row;
-        };
-    
-        push_affine(0, Ffl_max_);  // front
-        push_affine(1, Frl_max_);  // rear
+
+        // Required total lateral force (bicycle) ~ m * v^2 * kappa, with kappa ≈ delta/L
+        // We linearize w.r.t. delta and plug v_ref^2 to keep it affine.
+        const double coeff = m_ * (vref * vref) / L_;
+        const double Fy_cap = Fy_front_peak + Fy_rear_peak;
+
+        //  coeff * (+delta_k) <= Fy_cap
+        Aint.emplace_back(row, idx_x(k, id_delta), +coeff);
+        lin_v.push_back(-OSQP_INFTY);
+        uin_v.push_back(Fy_cap);
+        ++row;
+
+        //  coeff * (-delta_k) <= Fy_cap   ⇔   -coeff*delta_k <= Fy_cap
+        Aint.emplace_back(row, idx_x(k, id_delta), -coeff);
+        lin_v.push_back(-OSQP_INFTY);
+        uin_v.push_back(Fy_cap);
+        ++row;
     }
 
     // Gap lower bound d >= 0 (optional but nice to keep feasibility)
     if (P.acc_enable){
         for (int k=0; k<=N; ++k){
-            push_row_le(row, idx_x(k,id_d), 1.0, 0.0, +OSQP_INFTY); ++row;
+            push_row_le(row, idx_x(k,id_d), 1.0, 0.0, +OSQP_INFTY); ++row;  // d >= 0
         }
-        // ACC safety: d_k - tau * v_k >= d_min  (only if there's a lead at step k)
         for (int k=0; k<N; ++k){
             const bool has = (ref.has_obj.size() > (size_t)k) ? (ref.has_obj[k]!=0) : false;
             if (!has) continue;
-            // Aineq[row, id_d] = +1, Aineq[row, id_v] = -tau
+            // d_k - tau * vx_k >= d_min  <=>  (+1)*d_k + (-tau)*vx_k >= d_min
             Aint.emplace_back(row, idx_x(k,id_d),  +1.0);
-            Aint.emplace_back(row, idx_x(k,id_v),  -P.acc_tau);
+            Aint.emplace_back(row, idx_x(k,id_vx), -P.acc_tau);
             lin_v.push_back(P.acc_dmin);
             uin_v.push_back(+OSQP_INFTY);
             ++row;
         }
-        }
+    }
 
     // Build A, l, u from triplets (no sparse blocks)
     const int meq = (int)beq.size();

@@ -19,6 +19,45 @@
 
 namespace fs = std::filesystem;
 
+// --- bring the tire struct from the controller header into this TU
+using TireParams = LTV_MPC::TireParams;
+
+// --- small helpers mirrored from mpc_ltv.cpp (local copies for the plant) ---
+static inline void static_axle_loads(double m, double g, double L, double d,
+                                     double& Fzf_ax, double& Fzr_ax) {
+  // simple static distribution: sum moments about rear axle
+  Fzf_ax = m * g * (L - d) / L;  // front axle
+  Fzr_ax = m * g * (d)     / L;  // rear axle
+}
+
+// ---- slip angle helpers (put in a shared header or at top of both files) ----
+static inline double clampAlpha(double a){
+  const double a_max = 0.6;            // ≈34°, safe for pure-lateral
+  return std::clamp(a, -a_max, a_max);
+}
+
+static inline double slipAngleFront(double vx, double vy, double dpsi,
+                                  double delta, double Lf)
+{
+  const double vx_eff = std::max(0.5, vx);          // low-speed guard
+  const double beta_f = std::atan((vy + Lf * dpsi) / vx_eff);
+  return clampAlpha(delta - beta_f);                // α_f opposes motion
+}
+
+static inline double slipAngleRear(double vx, double vy, double dpsi,
+                                 double Lr)
+{
+  const double vx_eff = std::max(0.5, vx);
+  const double beta_r = std::atan((vy - Lr * dpsi) / vx_eff);
+  return clampAlpha(-beta_r);
+}
+
+// Pure lateral Magic Formula
+static inline double pacejkaFy(double B,double C,double D,double E,double alpha){
+  const double x = B * alpha;
+  return D * std::sin( C * std::atan( x - E*(x - std::atan(x)) ) );
+}
+
 // ---------- Basic types ----------
 struct VehicleParams {
   double track_w{1.7}; // track width [m]
@@ -48,10 +87,12 @@ struct Limits {
 };
 
 struct State {
-  double s{0.0};   // along-road (we’ll log s_proj from project())
-  double x{0.0}, y{0.0}, psi{0.0};
-  double v{15.0};
-  double delta{0.0};
+  double s{0.0};            // along-road (you can keep this as “progress”)
+  double x{0.0}, y{0.0}, psi{0.0};   // world pose
+  double vx{15.0};          // longitudinal speed in body frame [m/s]
+  double vy{0.0};           // lateral speed in body frame [m/s]
+  double dpsi{0.0};         // yaw rate [rad/s]
+  double delta{0.0};        // steering angle [rad]
 };
 
 struct Control {
@@ -96,39 +137,77 @@ static inline CenterlineMap::LaneRef parseLane(std::string s) {
   return CenterlineMap::LaneRef::Center;
 }
 
-// ---------- Vehicle model ----------
+// ---------- Vehicle model (dynamic bicycle + pure lateral slip) ----------
 static State stepVehicle(const State& s, const Control& u,
-                         const VehicleParams& vp, const Limits& lim) {
+  const VehicleParams& vp, const Limits& lim,
+  const TireParams& tp) {
   State n = s;
   const double dt = vp.dt;
-  
+
   // clamp inputs
   const double R_cmd   = clamp(u.R,      lim.R_min, lim.R_max);
   const double ddelta  = clamp(u.ddelta, -lim.ddelta_max, lim.ddelta_max);
-  
-  // advance steering
+
+  // steer actuator
   n.delta = clamp(s.delta + ddelta * dt, -lim.delta_max, lim.delta_max);
+
+  // geometry
+  const double Lf = vp.L - vp.d;
+  const double Lr = vp.d;
+
+  // static normal loads (per axle). We’ll ignore load transfer here.
+  const double g = 9.81;
+  double Fzf_ax, Fzr_ax; // axle totals
+  static_axle_loads(vp.m, g, vp.L, vp.d, Fzf_ax, Fzr_ax);
+
+  // slip angles
+  const double alpha_f = slipAngleFront(s.vx, s.vy, s.dpsi, n.delta, Lf);
+  const double alpha_r = slipAngleRear(s.vx, s.vy, s.dpsi, Lr);
+
+  // Magic Formula scaling D per wheel = mu * Fz_wheel
+  // Axle total Fy = 2 * Fy_wheel(α, Fz_wheel)
+  const double Df_wheel = tp.muf * (Fzf_ax * 0.5);
+  const double Dr_wheel = tp.mur * (Fzr_ax * 0.5);
+
+  const double Fy_f_ax = 2.0 * pacejkaFy(tp.Bf, tp.Cf, Df_wheel, tp.Ef, alpha_f); // front axle
+  const double Fy_r_ax = 2.0 * pacejkaFy(tp.Br, tp.Cr, Dr_wheel, tp.Er, alpha_r); // rear axle
+
+  // longitudinal-lateral coupling in body frame
+  // (no powertrain losses / aero; keep your R-based longitudinal like before)
+  const double Fx_total = R_cmd; // if you want, split into axles; here treat as body Fx
+
+  // Rigid body dynamics in body frame
+  // x: forward, y: left
+  const double ax = (Fx_total - Fy_f_ax * std::sin(n.delta)) / vp.m + s.vy * s.dpsi;
+  const double ay = (Fy_f_ax * std::cos(n.delta) + Fy_r_ax) / vp.m - s.vx * s.dpsi;
+
+  // yaw dynamics
+  const double dpsi_dot = (Lf * Fy_f_ax * std::cos(n.delta) - Lr * Fy_r_ax) / vp.JG;
+
+  // integrate body-frame velocities
+  n.vx   = std::max(0.0, s.vx + ax * dt);
+  n.vy   =          s.vy + ay * dt;
+  n.dpsi =          s.dpsi + dpsi_dot * dt;
   
-  // dynamic longitudinal: a_eff = vdot
-  const double c  = std::cos(s.delta);
-  const double s2 = 1.0 / (c * c);            // sec^2(delta)
-  const double t  = std::tan(s.delta);
-  const double denom = (vp.m + vp.m0 * t * t);
-  const double coupling = (vp.m0 * t * s2) * ddelta * s.v;  // m0*tan*sec^2*δ̇*v
-  const double a_eff = (R_cmd - coupling) / std::max(1e-9, denom);
-  
-  // integrate longitudinal state
-  n.v = std::max(0.0, s.v + a_eff * dt);
-  n.s = s.s + n.v * dt;
-  
-  // pose (keep kinematic pose integration for logging)
-  n.x   = s.x + s.v * std::cos(s.psi) * dt;
-  n.y   = s.y + s.v * std::sin(s.psi) * dt;
-  n.psi = s.psi + (s.v / vp.L) * std::tan(s.delta) * dt;
-  
+  printf("Fx: %.2f, Fy_f: %.2f, Fy_r: %.2f\n", Fx_total, Fy_f_ax, Fy_r_ax);
+  printf("vx: %.2f, vy: %.2f, dpsi: %.2f, delta: %.2f\n", n.vx, n.vy, n.dpsi, n.delta);
+  printf("alpha_f: %.4f, alpha_r: %.4f\n", alpha_f, alpha_r);
+
+  // integrate world pose (standard body->world kinematics)
+  const double c = std::cos(s.psi), ss = std::sin(s.psi);
+  const double xdot = s.vx * c - s.vy * ss;
+  const double ydot = s.vx * ss + s.vy * c;
+
+  n.x   = s.x + xdot * dt;
+  n.y   = s.y + ydot * dt;
+  n.psi = wrapAngle(s.psi + s.dpsi * dt);
+
+  // along-road “s” can keep using forward speed as a proxy
+  n.s = s.s + std::max(0.0, s.vx) * dt;
+
   return n;
-                          
 }
+
 
 // ---------- Lane pose helpers ----------
 struct LanePose {
@@ -187,24 +266,33 @@ static void parseCLI(int argc, char** argv, CLI& cli) {
   }
 }
 
+// For logging: recompute axle lateral forces at the *current* state and inputs
 static inline std::pair<double,double>
-compute_tire_forces(double v, double delta, double ddelta, double R,
-                    const VehicleParams& vp)
+compute_tire_forces(const State& s, double delta, double R,
+                    const VehicleParams& vp, const TireParams& tp)
 {
-    const double c  = std::cos(delta);
-    const double s2 = 1.0 / (c * c);         // sec^2(delta)
-    const double t  = std::tan(delta);
-    const double denom  = (vp.m + vp.m0 * t * t);
-    const double common = (R * t) + (vp.m * v * ddelta * s2);  // Fwind=0
+  const double Lf = vp.L - vp.d;
+  const double Lr = vp.d;
 
-    const double Ffl = (vp.m / vp.L) * t * (1.0 - vp.d / vp.L) * v * v
-                     - ((vp.m0 - vp.m * vp.d / vp.L) / std::max(1e-9, denom)) * common;
+  // static loads
+  double Fzf_ax, Fzr_ax;
+  static_axle_loads(vp.m, 9.81, vp.L, vp.d, Fzf_ax, Fzr_ax);
 
-    const double Frl = (1.0 / c) * ( (vp.m / (vp.L * vp.L)) * vp.d * v * v * t
-                     + (vp.m0 / std::max(1e-9, denom)) * common );
+  // slip
+  const double alpha_f = slipAngleFront(s.vx, s.vy, s.dpsi, delta, Lf);
+  const double alpha_r = slipAngleRear (s.vx, s.vy, s.dpsi, Lr);
 
-    return {Ffl, Frl};
+  // scale
+  const double Df_wheel = tp.muf * (Fzf_ax * 0.5);
+  const double Dr_wheel = tp.mur * (Fzr_ax * 0.5);
+
+  const double Fy_f_ax = 2.0 * pacejkaFy(tp.Bf, tp.Cf, Df_wheel, tp.Ef, alpha_f);
+  const double Fy_r_ax = 2.0 * pacejkaFy(tp.Br, tp.Cr, Dr_wheel, tp.Er, alpha_r);
+
+  return {Fy_f_ax, Fy_r_ax};
 }
+
+
 
 // ---------- Main ----------
 int main(int argc, char** argv) {
@@ -240,18 +328,35 @@ int main(int argc, char** argv) {
   // --- Vehicle & MPC ---
   VehicleParams vp; Limits lim; State st;
   MPCParams mpcp; mpcp.N = 20; mpcp.dt = vp.dt; mpcp.L = vp.L;
-  double d_gap = 150.0;  // initial gap for ACC state
+  double d_gap = 150.0;
   LTV_MPC mpc(mpcp);
 
+  // limits/vehicle
   mpc.setVehicleParams(vp.m, vp.L, vp.d, vp.JG, vp.m0);
-  mpc.setLimits(lim.delta_max, lim.ddelta_max,
-                lim.R_min, lim.R_max, lim.Ffl_max, lim.Frl_max);
+  mpc.setLimits(lim.delta_max, lim.ddelta_max, lim.R_min, lim.R_max, lim.Ffl_max, lim.Frl_max);
+
+  // tire params (shared “character” for controller + plant)
+  TireParams plant_tp;           // <— NEW
+  plant_tp.muf = 1.05; plant_tp.mur = 1.00;
+  plant_tp.Bf  = 11.0; plant_tp.Cf  = 1.30; plant_tp.Ef = 0.97;
+  plant_tp.Br  = 12.0; plant_tp.Cr  = 1.25; plant_tp.Er = 1.00;
+
+  LTV_MPC::TireParams tp;        // controller-side (already had this)
+  tp.muf = plant_tp.muf; tp.mur = plant_tp.mur;
+  tp.Bf  = plant_tp.Bf; tp.Cf  = plant_tp.Cf; tp.Ef = plant_tp.Ef;
+  tp.Br  = plant_tp.Br; tp.Cr  = plant_tp.Cr; tp.Er = plant_tp.Er;
+  mpc.setTireParams(tp);
+
 
   // Initialize vehicle pose on chosen starting lane at s_min
   st.s = map.s_min();
   {
     LanePose p0 = lanePoseAt(map, st.s, cli.lane_from);
-    st = State{st.s, p0.x, p0.y, p0.psi, std::min(20.0, p0.v_ref), 0.0};
+    st.x = p0.x; st.y = p0.y; st.psi = p0.psi;
+    st.vx = std::min(20.0, p0.v_ref);
+    st.vy = 0.0;
+    st.dpsi = 0.0;
+    st.delta = 0.0;
   }
 
   // --- Logging ---
@@ -261,8 +366,9 @@ int main(int argc, char** argv) {
     return 1;
   }
   log << std::fixed << std::setprecision(6);
-  log << "t,s,x,y,psi,v,delta,R_cmd,ddelta_cmd,ey,epsi,dv,"
-         "v_ref,x_ref,y_ref,psi_ref,alpha,dmin,v_lead,d_gap,F_fl,F_rl\n";
+  log << "t,s,x,y,psi,vx,vy,dpsi,delta,R_cmd,ddelta_cmd,ey,epsi,dv,"
+       "v_ref,x_ref,y_ref,psi_ref,alpha,dmin,v_lead,d_gap,Fy_f,Fy_r\n";
+
 
   // --- Simulation loop ---
   const int steps = static_cast<int>(cli.T / vp.dt);
@@ -295,7 +401,7 @@ int main(int argc, char** argv) {
     const double ny =  std::cos(psi_ref);
     const double ey   = (st.x - x_ref) * nx + (st.y - y_ref) * ny;
     const double epsi = wrapAngle(st.psi - psi_ref);
-    const double dv   = st.v - cref.v_ref;
+    const double dv = st.vx - cref.v_ref;
 
     // --- MPC preview (reference horizon & corridor frames) ---
     MPCRef pref; pref.hp.resize(mpcp.N);
@@ -360,7 +466,13 @@ int main(int argc, char** argv) {
     }
 
     // Current state in Frenet error coordinates
-    MPCState xk{ey, epsi, st.v, st.delta};
+    MPCState xk;
+    xk.ey   = ey;
+    xk.epsi = epsi;
+    xk.vx   = st.vx;
+    xk.vy   = st.vy;
+    xk.delta= st.delta;
+    xk.d    = d_gap; 
 
     // --- Corridor planning (Algorithm-2 & 3 inspired) ---
     const double t0     = t;
@@ -433,19 +545,18 @@ int main(int argc, char** argv) {
     const double R_applied   = clamp(u_cmd.R,    lim.R_min, lim.R_max);
     const double ddel_applied= clamp(u_cmd.ddelta, -lim.ddelta_max, lim.ddelta_max);
 
-    // compute forces at the CURRENT state with the inputs you’ll apply
-    auto [Ffl_now, Frl_now] = compute_tire_forces(st.v, st.delta, ddel_applied, R_applied, vp);
+    // compute forces at the CURRENT state with applied inputs (for logging)
+    auto [Fy_f_now, Fy_r_now] = compute_tire_forces(st, st.delta, R_applied, vp, plant_tp);
+    // std::cout << "Fy_f=" << Fy_f_now << " N,  Fy_r=" << Fy_r_now << " N\n";
 
-    // (optional) print
-    std::cout << "Ffl=" << Ffl_now << " N,  Frl=" << Frl_now << " N\n";
-
-    st = stepVehicle(st, u_cmd, vp, lim);
+    // advance plant with tire-slip dynamics
+    st = stepVehicle(st, u_cmd, vp, lim, plant_tp);
 
     // Stop if we reach end of map
     if (projC.s_proj > map.s_max() - 1.0) break;
 
     // ego speed after sim step this cycle:
-    const double v_ego_now = st.v;         // or whatever your state variable is
+    const double v_ego_now = st.vx;       // or whatever your state variable is
 
     // lead speed *at current time t* using the same synthetic law
     auto lead_speed_now = [&](double t_query){
@@ -471,9 +582,9 @@ int main(int argc, char** argv) {
     // feed as x0 for next MPC call
     xk.d = d_gap;
 
-    std::cout << "d_gap = " << d_gap << " m\n";
-    std::cout << "v_ego = " << v_ego_now << " m/s\n";
-    std::cout << "v_lead = " << v_lead_now << " m/s\n";
+    // std::cout << "d_gap = " << d_gap << " m\n";
+    // std::cout << "v_ego = " << v_ego_now << " m/s\n";
+    // std::cout << "v_lead = " << v_lead_now << " m/s\n";
     std::cout << "----------------\n";
 
     if (!std::isfinite(v_lead_now))
@@ -481,11 +592,12 @@ int main(int argc, char** argv) {
 
     // --- Log ---
     log << t << "," << projC.s_proj << "," << st.x << "," << st.y << ","
-        << st.psi << "," << st.v << "," << st.delta << ","
-        << u_mpc.R << "," << u_mpc.ddelta << ","
-        << ey << "," << epsi << "," << dv << ","
-        << cref.v_ref << "," << x_ref << "," << y_ref << "," << psi_ref << ","
-        << alpha << "," << dmin << "," << v_lead_now << "," << d_gap << "," << Ffl_now << "," << Frl_now << "\n";
+    << st.psi << "," << st.vx << "," << st.vy << "," << st.dpsi << "," << st.delta << ","
+    << u_mpc.R << "," << u_mpc.ddelta << ","
+    << ey << "," << epsi << "," << (st.vx - cref.v_ref) << ","
+    << cref.v_ref << "," << x_ref << "," << y_ref << "," << psi_ref << ","
+    << alpha << "," << dmin << "," << v_lead_now << "," << d_gap << ","
+    << Fy_f_now << "," << Fy_r_now << "\n";
   }
 
   std::cout << "Log written to: " << cli.log_file << "\n";
