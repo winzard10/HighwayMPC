@@ -116,6 +116,15 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         Eigen::VectorXd cd = P.dt * d;
 
         lm_.A[k] = Ad; lm_.B[k] = Bd; lm_.c[k] = cd;
+
+        if (P.acc_enable) {
+            const int id_v = 2;
+            const int id_d  = 4;
+            const double vobj = (ref.v_obj.size() > (size_t)k) ? ref.v_obj[k] : ref.hp[idx].v_ref;
+            Ad(id_d, id_d) += 1.0;      // d_{k+1} depends on d_k
+            Ad(id_d, id_v) += -P.dt;   // -vx_k
+            cd(id_d)        +=  P.dt * vobj;
+        }
     }
 
     // Basic nominal trajectory (zeros except v nominal to last preview)
