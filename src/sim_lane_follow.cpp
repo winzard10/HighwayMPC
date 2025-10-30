@@ -121,7 +121,7 @@ static State stepVehicle(const State& s, const Control& u,
   n.v = std::max(0.0, s.v + a_eff * dt);
   n.s = s.s + n.v * dt;
   
-  // pose (keep kinematic pose integration for logging)
+  // pose (rear wheel) (keep kinematic pose integration for logging)
   n.x   = s.x + s.v * std::cos(s.psi) * dt;
   n.y   = s.y + s.v * std::sin(s.psi) * dt;
   n.psi = s.psi + (s.v / vp.L) * std::tan(s.delta) * dt;
