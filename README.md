@@ -25,5 +25,5 @@ cd build
 cmake ..
 make
 cd ..
-./build/sim_lane_follow
+./build/sim_lane_follow 
 python3 viz_lane_follow.py

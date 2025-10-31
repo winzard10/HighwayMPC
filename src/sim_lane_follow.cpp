@@ -71,7 +71,7 @@ struct VehicleParams {
   double m0     = 185.09;    // kg   ( (JG + m d^2)/l^2 from table )
   // aerodrag bundle k is ignored because Fwind = 0 for this task
 
-  double dt{0.01};  // step [s]
+  double dt{0.05};  // step [s]
 };
 
 struct Limits {
