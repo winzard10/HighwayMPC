@@ -67,11 +67,11 @@ struct VehicleParams {
   double L      = 3.4;       // m
   double d      = 1.6;       // m   (CM -> rear axle)
   double a_ax   = L - d;   // m   (CM -> front axle)
-  double JG     = 450.0;     // kg m^2
+  double JG     = 2500.0;     // kg m^2
   double m0     = 185.09;    // kg   ( (JG + m d^2)/l^2 from table )
   // aerodrag bundle k is ignored because Fwind = 0 for this task
 
-  double dt{0.1};  // step [s]
+  double dt{0.01};  // step [s]
 };
 
 struct Limits {
@@ -89,7 +89,7 @@ struct Limits {
 struct State {
   double s{0.0};            // along-road (you can keep this as “progress”)
   double x{0.0}, y{0.0}, psi{0.0};   // world pose
-  double vx{15.0};          // longitudinal speed in body frame [m/s]
+  double vx{0.0};          // longitudinal speed in body frame [m/s]
   double vy{0.0};           // lateral speed in body frame [m/s]
   double dpsi{0.0};         // yaw rate [rad/s]
   double delta{0.0};        // steering angle [rad]
@@ -141,71 +141,96 @@ static inline CenterlineMap::LaneRef parseLane(std::string s) {
 static State stepVehicle(const State& s, const Control& u,
   const VehicleParams& vp, const Limits& lim,
   const TireParams& tp) {
-  State n = s;
-  const double dt = vp.dt;
+State n = s;
+const double dt = vp.dt;
 
-  // clamp inputs
-  const double R_cmd   = clamp(u.R,      lim.R_min, lim.R_max);
-  const double ddelta  = clamp(u.ddelta, -lim.ddelta_max, lim.ddelta_max);
+// clamp inputs
+const double R_cmd   = clamp(u.R,      lim.R_min, lim.R_max);
+const double ddelta  = clamp(u.ddelta, -lim.ddelta_max, lim.ddelta_max);
 
-  // steer actuator
-  n.delta = clamp(s.delta + ddelta * dt, -lim.delta_max, lim.delta_max);
+// steer actuator
+n.delta = clamp(s.delta + ddelta * dt, -lim.delta_max, lim.delta_max);
 
-  // geometry
-  const double Lf = vp.L - vp.d;
-  const double Lr = vp.d;
+// geometry
+const double Lf = vp.L - vp.d;
+const double Lr = vp.d;
 
-  // static normal loads (per axle). We’ll ignore load transfer here.
-  const double g = 9.81;
-  double Fzf_ax, Fzr_ax; // axle totals
-  static_axle_loads(vp.m, g, vp.L, vp.d, Fzf_ax, Fzr_ax);
+// ----- Tire slips (body frame kinematics; delta already updated in n.delta)
+const double vx_eps  = 0.5;
+const double vx_eff  = (std::abs(s.vx) < vx_eps) ? copysign(vx_eps, (s.vx==0.0?1.0:s.vx)) : s.vx;
 
-  // slip angles
-  const double alpha_f = slipAngleFront(s.vx, s.vy, s.dpsi, n.delta, Lf);
-  const double alpha_r = slipAngleRear(s.vx, s.vy, s.dpsi, Lr);
+// alpha definitions (standard)
+const double alpha_f = std::atan2(s.vy + Lf * s.dpsi, vx_eff) - n.delta;
+const double alpha_r = std::atan2(s.vy - Lr * s.dpsi, vx_eff);
+// printf("steering angle = %f rad\n", n.delta);
+printf("vx = %f m/s, vy = %f m/s, dpsi = %f rad/s\n", s.vx, s.vy, s.dpsi);
 
-  // Magic Formula scaling D per wheel = mu * Fz_wheel
-  // Axle total Fy = 2 * Fy_wheel(α, Fz_wheel)
-  const double Df_wheel = tp.muf * (Fzf_ax * 0.5);
-  const double Dr_wheel = tp.mur * (Fzr_ax * 0.5);
+// ----- Per-axle normal loads (static for now)
+const double g = 9.81;
+double Fzf_ax, Fzr_ax;
+static_axle_loads(vp.m, g, vp.L, vp.d, Fzf_ax, Fzr_ax);
 
-  const double Fy_f_ax = 2.0 * pacejkaFy(tp.Bf, tp.Cf, Df_wheel, tp.Ef, alpha_f); // front axle
-  const double Fy_r_ax = 2.0 * pacejkaFy(tp.Br, tp.Cr, Dr_wheel, tp.Er, alpha_r); // rear axle
+// Magic Formula scaling per *wheel*
+const double Df_wheel = tp.muf * (Fzf_ax * 0.5);
+const double Dr_wheel = tp.mur * (Fzr_ax * 0.5);
 
-  // longitudinal-lateral coupling in body frame
-  // (no powertrain losses / aero; keep your R-based longitudinal like before)
-  const double Fx_total = R_cmd; // if you want, split into axles; here treat as body Fx
+// ----- Pure lateral MF in tire frame (sign!)
+auto MFy = [&](double B,double C,double D,double E,double a){ return pacejkaFy(B,C,D,E,a); };
+// If your `pacejkaFy` has the same sign as alpha (typical), tire lateral must be negative of that:
+double Fy_f_tire = -2.0 * MFy(tp.Bf, tp.Cf, Df_wheel, tp.Ef, alpha_f);
+double Fy_r_tire = -2.0 * MFy(tp.Br, tp.Cr, Dr_wheel, tp.Er, alpha_r);
 
-  // Rigid body dynamics in body frame
-  // x: forward, y: left
-  const double ax = (Fx_total - Fy_f_ax * std::sin(n.delta)) / vp.m + s.vy * s.dpsi;
-  const double ay = (Fy_f_ax * std::cos(n.delta) + Fy_r_ax) / vp.m - s.vx * s.dpsi;
+// ----- Longitudinal split (commands are in *tire* x′ if you intended axle request)
+double Fx_f_tire = 0.0;            // RWD example
+double Fx_r_tire = R_cmd;          // make sure R_cmd is a *force at tire*, not torque
 
-  // yaw dynamics
-  const double dpsi_dot = (Lf * Fy_f_ax * std::cos(n.delta) - Lr * Fy_r_ax) / vp.JG;
+// ----- Combined-slip clamp *per axle* (approx). Better is per wheel; keep yours for now.
+auto clamp_ellipse = [](double& Fx_ax, double& Fy_ax, double mu, double Fz_ax){
+  const double Fmax = std::max(1e-6, mu * Fz_ax);
+  const double n = std::hypot(Fx_ax, Fy_ax);
+  if (n > Fmax) { const double s = Fmax / n; Fx_ax *= s; Fy_ax *= s; }
+};
+clamp_ellipse(Fx_f_tire, Fy_f_tire, tp.muf, Fzf_ax);
+clamp_ellipse(Fx_r_tire, Fy_r_tire, tp.mur, Fzr_ax);
 
-  // integrate body-frame velocities
-  n.vx   = std::max(0.0, s.vx + ax * dt);
-  n.vy   =          s.vy + ay * dt;
-  n.dpsi =          s.dpsi + dpsi_dot * dt;
-  
-  printf("Fx: %.2f, Fy_f: %.2f, Fy_r: %.2f\n", Fx_total, Fy_f_ax, Fy_r_ax);
-  printf("vx: %.2f, vy: %.2f, dpsi: %.2f, delta: %.2f\n", n.vx, n.vy, n.dpsi, n.delta);
-  printf("alpha_f: %.4f, alpha_r: %.4f\n", alpha_f, alpha_r);
+printf("alpha_f = %f, raw pacejkaFy = %f\n", alpha_f, pacejkaFy(tp.Bf, tp.Cf, Df_wheel, tp.Ef, alpha_f));
 
-  // integrate world pose (standard body->world kinematics)
-  const double c = std::cos(s.psi), ss = std::sin(s.psi);
-  const double xdot = s.vx * c - s.vy * ss;
-  const double ydot = s.vx * ss + s.vy * c;
+// ----- Rotate front axle from tire frame -> body frame
+const double cdel = std::cos(n.delta), sdel = std::sin(n.delta);
+const double Fx_f_body =  Fx_f_tire * cdel - Fy_f_tire * sdel;
+const double Fy_f_body =  Fx_f_tire * sdel + Fy_f_tire * cdel;
 
-  n.x   = s.x + xdot * dt;
-  n.y   = s.y + ydot * dt;
-  n.psi = wrapAngle(s.psi + s.dpsi * dt);
+// Rear axle (tire frame aligns with body frame)
+const double Fx_r_body = Fx_r_tire;
+const double Fy_r_body = Fy_r_tire;
 
-  // along-road “s” can keep using forward speed as a proxy
-  n.s = s.s + std::max(0.0, s.vx) * dt;
+// ----- Sum forces and yaw moment in body frame
+const double Fx_sum = Fx_f_body + Fx_r_body;
+const double Fy_sum = Fy_f_body + Fy_r_body;
+const double Mz     =  Lf * Fy_f_body - Lr * Fy_r_body;   // sign per y-left, psi-CCW
 
-  return n;
+// ----- Rigid-body dynamics (body frame)
+const double ax = Fx_sum / vp.m + s.dpsi * s.vy;
+const double ay = Fy_sum / vp.m - s.dpsi * vx_eff;
+const double dpsi_dot = Mz / vp.JG;
+
+// ----- Integrate body-frame velocities (semi-implicit guard on vx)
+n.vx   = std::max(0.0, s.vx + ax * dt);
+n.vy   =              s.vy + ay * dt;
+n.dpsi =              s.dpsi + dpsi_dot * dt;
+
+// ----- Kinematic pose update (use *updated* velocities)
+const double cpsi = std::cos(n.psi), spsi = std::sin(n.psi);
+const double xdot = n.vx * cpsi - n.vy * spsi;
+const double ydot = n.vx * spsi + n.vy * cpsi;
+
+n.x   = s.x + xdot * dt;
+n.y   = s.y + ydot * dt;
+n.psi = wrapAngle(s.psi + n.dpsi * dt);
+
+// Along-road proxy
+n.s = s.s + std::max(0.0, n.vx) * dt;
+return n;
 }
 
 
@@ -337,9 +362,9 @@ int main(int argc, char** argv) {
 
   // tire params (shared “character” for controller + plant)
   TireParams plant_tp;           // <— NEW
-  plant_tp.muf = 1.05; plant_tp.mur = 1.00;
-  plant_tp.Bf  = 11.0; plant_tp.Cf  = 1.30; plant_tp.Ef = 0.97;
-  plant_tp.Br  = 12.0; plant_tp.Cr  = 1.25; plant_tp.Er = 1.00;
+  plant_tp.muf = 1.00; plant_tp.mur = 1.00;
+  plant_tp.Bf  = 7.8727; plant_tp.Cf  = 2.5296; plant_tp.Ef = 1.3059;
+  plant_tp.Br  = 7.8727; plant_tp.Cr  = 2.5296; plant_tp.Er = 1.3059;
 
   LTV_MPC::TireParams tp;        // controller-side (already had this)
   tp.muf = plant_tp.muf; tp.mur = plant_tp.mur;
@@ -353,7 +378,8 @@ int main(int argc, char** argv) {
   {
     LanePose p0 = lanePoseAt(map, st.s, cli.lane_from);
     st.x = p0.x; st.y = p0.y; st.psi = p0.psi;
-    st.vx = std::min(20.0, p0.v_ref);
+    // st.vx = std::min(0.5, p0.v_ref);
+    st.vx = 20.0;
     st.vy = 0.0;
     st.dpsi = 0.0;
     st.delta = 0.0;
@@ -470,9 +496,11 @@ int main(int argc, char** argv) {
     xk.ey   = ey;
     xk.epsi = epsi;
     xk.vx   = st.vx;
+    xk.dpsi = st.dpsi;
     xk.vy   = st.vy;
     xk.delta= st.delta;
     xk.d    = d_gap; 
+
 
     // --- Corridor planning (Algorithm-2 & 3 inspired) ---
     const double t0     = t;
@@ -539,14 +567,15 @@ int main(int argc, char** argv) {
       dmin = std::numeric_limits<double>::quiet_NaN();
 
     // --- Advance vehicle dynamics ---
-    const Control u_cmd{u_mpc.R, u_mpc.ddelta};
-
+    
+    // const Control u_cmd{0.0, 0.0};  // <--- for testing without control
     // clamp like the plant does
-    const double R_applied   = clamp(u_cmd.R,    lim.R_min, lim.R_max);
-    const double ddel_applied= clamp(u_cmd.ddelta, -lim.ddelta_max, lim.ddelta_max);
+    const double R_cmd   = clamp(u_mpc.R, lim.R_min, lim.R_max);
+    const double ddelta_cmd = clamp(u_mpc.ddelta, -lim.ddelta_max, lim.ddelta_max);
+    const Control u_cmd{R_cmd, ddelta_cmd};
 
     // compute forces at the CURRENT state with applied inputs (for logging)
-    auto [Fy_f_now, Fy_r_now] = compute_tire_forces(st, st.delta, R_applied, vp, plant_tp);
+    auto [Fy_f_now, Fy_r_now] = compute_tire_forces(st, st.delta, u_cmd.R, vp, plant_tp);
     // std::cout << "Fy_f=" << Fy_f_now << " N,  Fy_r=" << Fy_r_now << " N\n";
 
     // advance plant with tire-slip dynamics
@@ -593,7 +622,7 @@ int main(int argc, char** argv) {
     // --- Log ---
     log << t << "," << projC.s_proj << "," << st.x << "," << st.y << ","
     << st.psi << "," << st.vx << "," << st.vy << "," << st.dpsi << "," << st.delta << ","
-    << u_mpc.R << "," << u_mpc.ddelta << ","
+    << u_cmd.R << "," << u_cmd.ddelta << ","
     << ey << "," << epsi << "," << (st.vx - cref.v_ref) << ","
     << cref.v_ref << "," << x_ref << "," << y_ref << "," << psi_ref << ","
     << alpha << "," << dmin << "," << v_lead_now << "," << d_gap << ","

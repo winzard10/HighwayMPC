@@ -52,25 +52,21 @@ void LTV_MPC::setLimits(double delta_max, double ddelta_max,
 
 // ---- slip angle helpers (put in a shared header or at top of both files) ----
 static inline double clampAlpha(double a){
-    const double a_max = 0.6;            // ≈34°, safe for pure-lateral
+    const double a_max = 0.6; // ~34°
     return std::clamp(a, -a_max, a_max);
-}
+  }
+  
+  static inline double slipAngleFront(double vx, double vy, double dpsi, double delta, double Lf){
+    const double vx_eff = std::max(0.1, vx);
+    const double beta_f = std::atan2(vy + Lf * dpsi, vx_eff);
+    return clampAlpha(beta_f - delta);
+  }
+  static inline double slipAngleRear(double vx, double vy, double dpsi, double Lr){
+    const double vx_eff = std::max(0.1, vx);
+    const double beta_r = std::atan2(vy - Lr * dpsi, vx_eff);
+    return clampAlpha(beta_r);
+  }
 
-static inline double slipAngleFront(double vx, double vy, double dpsi,
-                                    double delta, double Lf)
-{
-    const double vx_eff = std::max(0.5, vx);          // low-speed guard
-    const double beta_f = std::atan((vy + Lf * dpsi) / vx_eff);
-    return clampAlpha(delta - beta_f);                // α_f opposes motion
-}
-
-static inline double slipAngleRear(double vx, double vy, double dpsi,
-                                   double Lr)
-{
-    const double vx_eff = std::max(0.5, vx);
-    const double beta_r = std::atan((vy - Lr * dpsi) / vx_eff);
-    return clampAlpha(-beta_r);
-}
 
 // Pure lateral Magic Formula (Pacejka 1996)
 static inline double pacejkaFy(double B,double C,double D,double E,double alpha){
@@ -142,27 +138,51 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         const double alpha_r = slipAngleRear (vx, vy, dpsi, Lr);
 
         // lateral forces (pure lateral MF)
-        const double Fy_f = pacejkaFy(Bf, Cf, Df, tires_.Ef, alpha_f);
-        const double Fy_r = pacejkaFy(Br, Cr, Dr, tires_.Er, alpha_r);
+        double Fy_f = - 2.0 * pacejkaFy(Bf, Cf, Df, tires_.Ef, alpha_f);
+        double Fy_r = - 2.0 * pacejkaFy(Br, Cr, Dr, tires_.Er, alpha_r);
 
-        // body accelerations (no aero drag here)
-        const double ax = (R - Fy_f * std::sin(delta)) / m_ + vy * dpsi;
-        const double ay = (Fy_f * std::cos(delta) + Fy_r) / m_ - vx * dpsi;
+        // ---- normal loads per axle (static) ----
+        const double g = 9.81;
+        const double Fzf_ax = m_ * g * (L_ - d_) / L_;
+        const double Fzr_ax = m_ * g * (d_)     / L_;
 
-        // curvature from preview
-        const double kappa = ref_k.hp[0].kappa;
-        // const double vref  = ref_k.hp[0].v_ref; // not needed inside f
+        // ---- split the longitudinal request to axles (example: RWD) ----
+        double Fx_f_ax = 0.0;
+        double Fx_r_ax = R;
+
+        // ---- friction ellipse clamp (per axle) ----
+        auto clamp_ellipse = [](double Fx_ax, double Fy_ax, double mu, double Fz_ax){
+        const double Fmax = std::max(1e-6, mu * Fz_ax);
+        const double n = std::sqrt(Fx_ax*Fx_ax + Fy_ax*Fy_ax);
+        if (n > Fmax) {
+            const double s = Fmax / n;
+            Fx_ax *= s;
+            Fy_ax *= s;
+        }
+        return std::pair<double,double>{Fx_ax, Fy_ax};
+        };
+
+        // use tire’s mu_f / mu_r, and the axle Fz you just computed
+        auto [Fx_f_ax_eff, Fy_f_eff] = clamp_ellipse(Fx_f_ax, Fy_f, tires_.muf, Fzf_ax);
+        auto [Fx_r_ax_eff, Fy_r_eff] = clamp_ellipse(Fx_r_ax, Fy_r, tires_.mur, Fzr_ax);
+
+        // total longitudinal after ellipse
+        const double Fx_total_eff = Fx_f_ax_eff + Fx_r_ax_eff;
+          
+
+        const double ax = (Fx_total_eff - Fy_f_eff * std::sin(delta)) / m_ + vy * dpsi;
+        const double ay = (Fy_f_eff * std::cos(delta) + Fy_r_eff)      / m_ - vx * dpsi;
 
         Eigen::VectorXd dx = Eigen::VectorXd::Zero(has_acc ? 7 : 6);
-        dx(0) = vx * std::sin(epsi) + vy * std::cos(epsi);            // ey_dot
-        dx(1) = dpsi - kappa * vx;                                    // epsi_dot
-        dx(2) = ax;                                                   // vx_dot
-        dx(3) = ay;                                                   // vy_dot
-        dx(4) = (Lf * Fy_f * std::cos(delta) - Lr * Fy_r) / JG_;      // dpsi_dot
-        dx(5) = ddelta;                                               // delta_dot
+        dx(0) = vx * std::sin(epsi) + vy * std::cos(epsi);                             // e_y_dot
+        dx(1) = dpsi - ref_k.hp[0].kappa * vx;                                         // e_psi_dot
+        dx(2) = ax;                                                                     // v_x_dot
+        dx(3) = ay;                                                                     // v_y_dot
+        dx(4) = (Lf * Fy_f_eff * std::cos(delta) - Lr * Fy_r_eff) / JG_;               // yaw-rate dot
+        dx(5) = ddelta;                                                                 // delta dot
         if (has_acc) {
-            const double v_obj = ref_k.hp[0].v_ref;                   // reuse v_ref as lead speed input
-            dx(6) = v_obj - vx;                                       // d_gap_dot
+            const double v_obj = ref_k.hp[0].v_ref;  // (your choice; just be consistent)
+            dx(6) = v_obj - vx;                      // gap dynamics
         }
 
         // silence unuseds (informative to keep but not used numerically)
@@ -221,15 +241,15 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         Eigen::MatrixXd Bd = P.dt * B;
         Eigen::VectorXd cd = P.dt * c;
 
-        // explicit ACC row in discrete form (matches dx(6)=v_obj - vx)
-        if (P.acc_enable) {
-            const int id_vx = 2;
-            const int id_d  = 6;
-            const double vobj = (ref.v_obj.size() > (size_t)k) ? ref.v_obj[k] : ref.hp[idx].v_ref;
-            Ad(id_d, id_d) += 1.0;      // d_{k+1} depends on d_k
-            Ad(id_d, id_vx) += -P.dt;   // -vx_k
-            cd(id_d)        +=  P.dt * vobj;
-        }
+        // // explicit ACC row in discrete form (matches dx(6)=v_obj - vx)
+        // if (P.acc_enable) {
+        //     const int id_vx = 2;
+        //     const int id_d  = 6;
+        //     const double vobj = (ref.v_obj.size() > (size_t)k) ? ref.v_obj[k] : ref.hp[idx].v_ref;
+        //     Ad(id_d, id_d) += 1.0;      // d_{k+1} depends on d_k
+        //     Ad(id_d, id_vx) += -P.dt;   // -vx_k
+        //     cd(id_d)        +=  P.dt * vobj;
+        // }
 
         lm_.A[k] = Ad;
         lm_.B[k] = Bd;
@@ -409,7 +429,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     beq(row_x0(id_epsi)) = x0.epsi;  Aeqt.emplace_back(row_x0(id_epsi), idx_x(0,id_epsi), 1.0);
     beq(row_x0(id_vx))   = x0.vx;    Aeqt.emplace_back(row_x0(id_vx),   idx_x(0,id_vx),   1.0);
     beq(row_x0(id_vy))   = x0.vy;    Aeqt.emplace_back(row_x0(id_vy),   idx_x(0,id_vy),   1.0);
-    beq(row_x0(id_r))    = 0.0;      Aeqt.emplace_back(row_x0(id_r),    idx_x(0,id_r),    1.0);
+    beq(row_x0(id_r))    = x0.dpsi;      Aeqt.emplace_back(row_x0(id_r),    idx_x(0,id_r),    1.0);
     beq(row_x0(id_delta))= x0.delta; Aeqt.emplace_back(row_x0(id_delta),idx_x(0,id_delta),1.0);
     if (P.acc_enable) {
         beq(row_x0(id_d)) = x0.d;
@@ -444,99 +464,14 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     
     // steering angle bounds
     for (int k=0; k<=N; ++k){
-        push_row_le(row, idx_x(k,3), 1.0, -delta_max_, delta_max_);      ++row; // δ
+        push_row_le(row, idx_x(k,id_delta), 1.0, -delta_max_, delta_max_);      ++row; // δ
     }
 
     // v bounds (optional)
     for (int k=0; k<=N; ++k){
-        push_row_le(row, idx_x(k,2), 1.0, P.v_min, P.v_max); ++row;
+        push_row_le(row, idx_x(k,id_vx), 1.0, P.v_min, P.v_max); ++row;
     }
-
-    // delta bounds
-    // for (int k=0; k<=N; ++k){
-    //     push_row_le(row, idx_x(k,3), 1.0, -P.delta_max, P.delta_max); ++row;
-    // }
-
-    // --- tire force linearized inequalities
-    auto force_pair = [&](double v, double delta, double ddelta, double R) {
-        const double c  = std::cos(delta);
-        const double s2 = 1.0 / (c * c);      // sec^2(delta)
-        const double t  = std::tan(delta);
-        const double denom  = (m_ + m0_ * t * t);
-        const double common = (R * t) + (m_ * v * ddelta * s2); // Fwind = 0
     
-        // From the figure (Eq. 7), with Fwind = 0
-        const double Ffl = (m_ / L_) * t * (1.0 - d_ / L_) * v * v
-                         - ((m0_ - m_ * d_ / L_) / denom) * common;
-    
-        const double Frl = (1.0 / c) * ( (m_ / (L_ * L_)) * d_ * v * v * t
-                                       + (m0_ / denom) * common );
-    
-        return std::pair<double,double>(Ffl, Frl); // {front, rear}
-    };
-    
-    // auto force_jac = [&](double v, double delta, double ddelta, double R) {
-    //     const double eps = 1e-6;
-    //     auto F0   = force_pair(v, delta, ddelta, R);
-    //     auto F_v  = force_pair(v + eps, delta, ddelta, R);
-    //     auto F_de = force_pair(v, delta + eps, ddelta, R);
-    //     auto F_dd = force_pair(v, delta, ddelta + eps, R);
-    //     auto F_R  = force_pair(v, delta, ddelta, R + eps);
-    
-    //     // rows: [front; rear], cols: [v, delta, ddelta, R]
-    //     Eigen::Matrix<double,2,4> J;
-    //     J(0,0) = (F_v.first   - F0.first  ) / eps;  J(1,0) = (F_v.second   - F0.second  ) / eps;
-    //     J(0,1) = (F_de.first  - F0.first  ) / eps;  J(1,1) = (F_de.second  - F0.second  ) / eps;
-    //     J(0,2) = (F_dd.first  - F0.first  ) / eps;  J(1,2) = (F_dd.second  - F0.second  ) / eps;
-    //     J(0,3) = (F_R.first   - F0.first  ) / eps;  J(1,3) = (F_R.second   - F0.second  ) / eps;
-    
-    //     return std::make_pair(F0, J);
-    // };
-    
-    // for (int k = 0; k < N; ++k) {
-    //     // linearize around the same reference you used in buildLinearization
-    //     const int idx = std::min<int>(k, (int)ref.hp.size() - 1);
-    //     const double vref = (idx >= 0) ? ref.hp[idx].v_ref : 0.0;
-    //     const double deltaref = 0.0;   // if you keep δ_nom = 0
-    //     const double ddref    = 0.0;
-    //     const double Rref     = 0.0;
-    
-    //     auto FJ = force_jac(vref, deltaref, ddref, Rref);
-    //     const double Ffl0 = FJ.first.first;      // front force at ref
-    //     const double Frl0 = FJ.first.second;     // rear  force at ref
-    //     const auto&  J    = FJ.second;           // 2x4 jacobian
-    
-    //     // helper to push one affine inequality: alpha*z <= beta
-    //     auto push_affine = [&](int which, double Fmax){
-    //         // which: 0 = front, 1 = rear
-    //         const double jv   = J(which, 0);
-    //         const double jdel = J(which, 1);
-    //         const double jdd  = J(which, 2);
-    //         const double jR   = J(which, 3);
-    //         const double F0   = (which == 0) ? Ffl0 : Frl0;
-    
-    //         // +Jv*v_k + Jdel*delta_k + Jdd*ddelta_k + JR*R_k <= Fmax - F0
-    //         Aint.emplace_back(row, idx_x(k, id_v),     jv);
-    //         Aint.emplace_back(row, idx_x(k, id_delta), jdel);
-    //         Aint.emplace_back(row, idx_u(k, 1),        jdd);
-    //         Aint.emplace_back(row, idx_u(k, 0),        jR);
-    //         lin_v.push_back(-OSQP_INFTY);
-    //         uin_v.push_back(Fmax - F0);
-    //         ++row;
-    
-    //         // and symmetric: -F(x,u) <= Fmax  → negate coeffs, RHS = Fmax + F0
-    //         Aint.emplace_back(row, idx_x(k, id_v),     -jv);
-    //         Aint.emplace_back(row, idx_x(k, id_delta), -jdel);
-    //         Aint.emplace_back(row, idx_u(k, 1),        -jdd);
-    //         Aint.emplace_back(row, idx_u(k, 0),        -jR);
-    //         lin_v.push_back(-OSQP_INFTY);
-    //         uin_v.push_back(Fmax + F0);
-    //         ++row;
-    //     };
-    
-    //     push_affine(0, Ffl_max_);  // front
-    //     push_affine(1, Frl_max_);  // rear
-    // }
 
     const double g_acc = 9.81;
     double Fzf0, Fzr0;

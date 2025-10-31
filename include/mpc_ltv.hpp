@@ -18,9 +18,9 @@ struct MPCParams {
     // weights
     double wy    = 0.20;
     double wpsi  = 0.02;
-    double wv    = 0.25;
-    double wR    = 0.05e-6;
-    double wdd   = 0.10;   // effort on ddelta
+    double wv    = 0.01;
+    double wR    = 1e-3;
+    double wdd   = 1e-2;   // effort on ddelta
     double wdR   = 0.00;   // slew R    (u_k - u_{k-1})
     double wddd  = 0.00;   // slew ddelta
     double wyf   = 8.0;    // terminal ey
@@ -125,8 +125,10 @@ public:
     struct TireParams {
         // Simple “pure lateral” Magic Formula form where D = mu * Fz.
         // If you later want full D(Fz), B(Fz), E(Fz), keep these as functions.
-        double Bf{10.0}, Cf{1.3}, Ef{0.97}, muf{1.0};  // front
-        double Br{12.0}, Cr{1.3}, Er{1.00}, mur{1.0};  // rear
+        // double Bf{10.0}, Cf{1.3}, Ef{0.97}, muf{1.0};  // front
+        // double Br{12.0}, Cr{1.3}, Er{1.00}, mur{1.0};  // rear
+        double Bf{7.8727}, Cf{2.5296}, Ef{1.3059}, muf{1.0};  // front
+        double Br{7.8727}, Cr{2.5296}, Er{1.3059}, mur{1.0};  // rear
     };
 
     // in class LTV_MPC public:
