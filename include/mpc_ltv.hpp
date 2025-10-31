@@ -11,7 +11,7 @@
 // MPC configuration (kept as-is)
 // ---------------------------------
 struct MPCParams {
-    int    N   = 20;
+    int    N   = 200;
     double dt  = 0.1;
     double L   = 2.7;
 
