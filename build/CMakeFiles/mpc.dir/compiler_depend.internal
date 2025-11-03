@@ -605,4 +605,18 @@ CMakeFiles/mpc.dir/src/mpc_ltv.cpp.o
  /usr/include/c++/11/pstl/glue_memory_defs.h
  /home/phurithat/.local/include/OsqpEigen/Solver.tpp
  /home/phurithat/.local/include/OsqpEigen/Debug.hpp
+ /usr/include/eigen3/unsupported/Eigen/MatrixFunctions
+ /usr/include/c++/11/cfloat
+ /usr/lib/gcc/x86_64-linux-gnu/11/include/float.h
+ /usr/include/eigen3/Eigen/Core
+ /usr/include/eigen3/Eigen/LU
+ /usr/include/eigen3/Eigen/Eigenvalues
+ /usr/include/eigen3/Eigen/src/Core/util/DisableStupidWarnings.h
+ /usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/MatrixExponential.h
+ /usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/StemFunction.h
+ /usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/MatrixFunction.h
+ /usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/MatrixSquareRoot.h
+ /usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/MatrixLogarithm.h
+ /usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/MatrixPower.h
+ /usr/include/eigen3/Eigen/src/Core/util/ReenableStupidWarnings.h
 

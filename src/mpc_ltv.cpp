@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 #include <vector>
+#include <unsupported/Eigen/MatrixFunctions>
 
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
@@ -42,6 +43,47 @@ void LTV_MPC::setLimits(double delta_max, double ddelta_max,
     ddelta_max_ = ddelta_max;
     Rmin_ = R_min; Rmax_ = R_max;
     Ffl_max_ = Ffl_max; Frl_max_ = Frl_max;
+}
+
+void discretizeZOH(const Eigen::MatrixXd& A,
+    const Eigen::MatrixXd& B,         // may be (n×0) if no inputs
+    const Eigen::VectorXd& d,         // may be size-0 if no affine term
+    double dt,
+    Eigen::MatrixXd& Ad,
+    Eigen::MatrixXd& Bd,
+    Eigen::VectorXd& cd)
+{
+    using namespace Eigen;
+    const int n = static_cast<int>(A.rows());
+    const int m = static_cast<int>(B.cols());
+
+    // --- Ad = exp(A*dt)
+    Ad = (A * dt).exp();
+
+    // --- Bd via Van Loan block exp: exp([A  B; 0 0] dt) = [Ad  Bd; 0  I]
+    if (m > 0) {
+    MatrixXd M(n + m, n + m);
+    M.setZero();
+    M.topLeftCorner(n, n) = A * dt;
+    M.topRightCorner(n, m) = B * dt;
+    // bottom-right is 0 (whose exp is I)
+    MatrixXd expM = M.exp();
+    Bd = expM.topRightCorner(n, m);
+    } else {
+    Bd.resize(n, 0);
+    }
+
+    // --- cd via same trick: exp([A  d; 0 0] dt) = [Ad  cd; 0  1]
+    if (d.size() == n) {
+    MatrixXd Md(n + 1, n + 1);
+    Md.setZero();
+    Md.topLeftCorner(n, n) = A * dt;
+    Md.topRightCorner(n, 1) = d * dt;
+    MatrixXd expMd = Md.exp();
+    cd = expMd.topRightCorner(n, 1);
+    } else {
+    cd = VectorXd::Zero(n);
+    }
 }
 
 // ------------------------------------------------------------------
@@ -110,20 +152,22 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         // delta_dot = ddelta  (same as before)
         B(3,1) = 1.0;
 
-        // discretize (Euler)
-        Eigen::MatrixXd Ad = Eigen::MatrixXd::Identity(nx, nx) + P.dt * A;
-        Eigen::MatrixXd Bd = P.dt * B;
-        Eigen::VectorXd cd = P.dt * d;
+        // discretize (ZOH)
+        Eigen::MatrixXd Ad, Bd;
+        Eigen::VectorXd cd;
+        discretizeZOH(A, B, d, P.dt, Ad, Bd, cd);
 
         lm_.A[k] = Ad; lm_.B[k] = Bd; lm_.c[k] = cd;
 
         if (P.acc_enable) {
-            const int id_v = 2;
-            const int id_d  = 4;
-            const double vobj = (ref.v_obj.size() > (size_t)k) ? ref.v_obj[k] : ref.hp[idx].v_ref;
-            Ad(id_d, id_d) += 1.0;      // d_{k+1} depends on d_k
-            Ad(id_d, id_v) += -P.dt;   // -vx_k
-            cd(id_d)        +=  P.dt * vobj;
+            const int id_v = 2;   // v index
+            const int id_d = 4;   // distance state index
+        
+            // d_dot = v_obj(k) - v   (treat v_obj piecewise-constant over the sample)
+            A(id_d, id_v) = -1.0;
+            d(id_d)       = (ref.v_obj.size() > (size_t)k)
+                            ? ref.v_obj[k]
+                            : ref.hp[idx].v_ref;
         }
     }
 
@@ -239,6 +283,35 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
                 Ht.emplace_back(ukm1,  uk,   -2.0*w);
             }
         }
+
+        // --- propulsion "jerk": (R_k - 2 R_{k-1} + R_{k-2})^2
+        if (P.wddR > 0.0) {
+            for (int k = 2; k < N; ++k) {
+                const int Rk   = idx_u(k,   0);  // R_k
+                const int Rkm1 = idx_u(k-1, 0);  // R_{k-1}
+                const int Rkm2 = idx_u(k-2, 0);  // R_{k-2}
+
+                // coefficients of the second difference: [1, -2, 1]
+                const double a =  1.0, b = -2.0, c = 1.0;
+                const double s = 2.0 * P.wddR;     // factor for Hessian (2 * w)
+
+                // diagonals
+                Ht.emplace_back(Rk,   Rk,   s * a*a);     // +2w * 1
+                Ht.emplace_back(Rkm1, Rkm1, s * b*b);     // +2w * 4
+                Ht.emplace_back(Rkm2, Rkm2, s * c*c);     // +2w * 1
+
+                // off-diagonals (symmetric)
+                Ht.emplace_back(Rk,   Rkm1, s * a*b);     // -4w
+                Ht.emplace_back(Rkm1, Rk,   s * a*b);
+
+                Ht.emplace_back(Rk,   Rkm2, s * a*c);     // +2w
+                Ht.emplace_back(Rkm2, Rk,   s * a*c);
+
+                Ht.emplace_back(Rkm1, Rkm2, s * b*c);     // -4w
+                Ht.emplace_back(Rkm2, Rkm1, s * b*c);
+                // no linear term because the reference for R is 0 by default
+            }
+        }
     }
 
     // terminal ey/epsi
@@ -331,11 +404,6 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     for (int k=0; k<=N; ++k){
         push_row_le(row, idx_x(k,2), 1.0, P.v_min, P.v_max); ++row;
     }
-
-    // delta bounds
-    // for (int k=0; k<=N; ++k){
-    //     push_row_le(row, idx_x(k,3), 1.0, -P.delta_max, P.delta_max); ++row;
-    // }
 
     // --- tire force linearized inequalities
     auto force_pair = [&](double v, double delta, double ddelta, double R) {

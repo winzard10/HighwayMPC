@@ -28,11 +28,11 @@ struct VehicleParams {
   double L      = 3.4;       // m
   double d      = 1.6;       // m   (CM -> rear axle)
   double a_ax   = L - d;   // m   (CM -> front axle)
-  double JG     = 450.0;     // kg m^2
+  double JG     = 2500.0;     // kg m^2
   double m0     = 185.09;    // kg   ( (JG + m d^2)/l^2 from table )
   // aerodrag bundle k is ignored because Fwind = 0 for this task
 
-  double dt{0.01};  // step [s]
+  double dt{0.05};  // step [s]
 };
 
 struct Limits {
@@ -239,7 +239,7 @@ int main(int argc, char** argv) {
 
   // --- Vehicle & MPC ---
   VehicleParams vp; Limits lim; State st;
-  MPCParams mpcp; mpcp.N = 20; mpcp.dt = vp.dt; mpcp.L = vp.L;
+  MPCParams mpcp; mpcp.N = 40; mpcp.dt = vp.dt; mpcp.L = vp.L;
   double d_gap = 150.0;  // initial gap for ACC state
   LTV_MPC mpc(mpcp);
 
