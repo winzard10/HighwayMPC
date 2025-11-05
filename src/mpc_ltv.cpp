@@ -57,16 +57,16 @@ static inline double clampAlpha(double a){
     return std::clamp(a, -a_max, a_max);
   }
   
-inline double slipAngleFront(double vx, double vy, double r, double delta, double Lf){
-  const double vxe = std::max(0.5, vx);
-  const double beta_f = std::atan2(vy + Lf*r, vxe);
-  return beta_f - delta;    // α_f = β_f − δ
-}
-inline double slipAngleRear(double vx, double vy, double r, double Lr){
-  const double vxe = std::max(0.5, vx);
-  const double beta_r = std::atan2(vy - Lr*r, vxe);
-  return beta_r;            // α_r = β_r
-}
+  static inline double slipAngleFront(double vx, double vy, double dpsi, double delta, double Lf){
+    const double vx_eff = std::max(0.1, vx);
+    const double beta_f = std::atan2(vy + Lf * dpsi, vx_eff);
+    return clampAlpha(beta_f - delta);
+  }
+  static inline double slipAngleRear(double vx, double vy, double dpsi, double Lr){
+    const double vx_eff = std::max(0.1, vx);
+    const double beta_r = std::atan2(vy - Lr * dpsi, vx_eff);
+    return clampAlpha(beta_r);
+  }
 
 
 // Pure lateral Magic Formula (Pacejka 1996)
