@@ -17,12 +17,12 @@ struct MPCParams {
 
     // weights
     double wy    = 0.25;
-    double wpsi  = 1.2;    // heading error (rad^2)  << much larger than before
+    double wpsi  = 0.10;    // heading error (rad^2)  << much larger than before
     double wv    = 0.25;
-    double wR    = 1e-6;
+    double wR    = 1e-5;
+    double wdR   = 1e-5;   // slew R    (u_k - u_{k-1})
+    double wddR  = 2e-5;    // jerk R    (u_k - 2u_{k-1} + u_{k-2})
     double wdd   = 8.0;   // effort on ddelta
-    double wdR   = 0.20e-6;   // slew R    (u_k - u_{k-1})
-    double wddR  = 0.06e-6;    // jerk R    (u_k - 2u_{k-1} + u_{k-2})
     double wddd  = 1.0;   // slew ddelta
     double wyf   = 3.0;    // terminal ey
     double wpsif = 8.0;    // terminal epsi
