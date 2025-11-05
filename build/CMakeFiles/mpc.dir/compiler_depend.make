@@ -603,8 +603,32 @@ CMakeFiles/mpc.dir/src/mpc_ltv.cpp.o: ../src/mpc_ltv.cpp \
   /usr/include/c++/11/bits/uses_allocator_args.h \
   /usr/include/c++/11/pstl/glue_memory_defs.h \
   /home/phurithat/.local/include/OsqpEigen/Solver.tpp \
-  /home/phurithat/.local/include/OsqpEigen/Debug.hpp
+  /home/phurithat/.local/include/OsqpEigen/Debug.hpp \
+  /usr/include/eigen3/unsupported/Eigen/MatrixFunctions \
+  /usr/include/c++/11/cfloat \
+  /usr/lib/gcc/x86_64-linux-gnu/11/include/float.h \
+  /usr/include/eigen3/Eigen/Core \
+  /usr/include/eigen3/Eigen/LU \
+  /usr/include/eigen3/Eigen/Eigenvalues \
+  /usr/include/eigen3/Eigen/src/Core/util/DisableStupidWarnings.h \
+  /usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/MatrixExponential.h \
+  /usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/StemFunction.h \
+  /usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/MatrixFunction.h \
+  /usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/MatrixSquareRoot.h \
+  /usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/MatrixLogarithm.h \
+  /usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/MatrixPower.h \
+  /usr/include/eigen3/Eigen/src/Core/util/ReenableStupidWarnings.h
 
+
+/usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/StemFunction.h:
+
+/usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/MatrixExponential.h:
+
+/usr/lib/gcc/x86_64-linux-gnu/11/include/float.h:
+
+/usr/include/c++/11/cfloat:
+
+/usr/include/eigen3/unsupported/Eigen/MatrixFunctions:
 
 /home/phurithat/.local/include/OsqpEigen/Solver.tpp:
 
@@ -1084,6 +1108,8 @@ CMakeFiles/mpc.dir/src/mpc_ltv.cpp.o: ../src/mpc_ltv.cpp \
 
 ../src/mpc_ltv.cpp:
 
+/usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/MatrixLogarithm.h:
+
 /usr/include/x86_64-linux-gnu/bits/wctype-wchar.h:
 
 /usr/include/eigen3/Eigen/src/Core/ArrayWrapper.h:
@@ -1241,6 +1267,8 @@ CMakeFiles/mpc.dir/src/mpc_ltv.cpp.o: ../src/mpc_ltv.cpp \
 /usr/include/c++/11/bits/exception.h:
 
 /usr/include/c++/11/bits/locale_facets.h:
+
+/usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/MatrixPower.h:
 
 /usr/include/c++/11/tr1/exp_integral.tcc:
 
@@ -1427,6 +1455,8 @@ CMakeFiles/mpc.dir/src/mpc_ltv.cpp.o: ../src/mpc_ltv.cpp \
 /usr/include/eigen3/Eigen/src/Core/util/IndexedViewHelper.h:
 
 /usr/include/eigen3/Eigen/src/Core/util/ReshapedHelper.h:
+
+/usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/MatrixSquareRoot.h:
 
 /usr/include/eigen3/Eigen/src/Core/ArithmeticSequence.h:
 
@@ -1755,6 +1785,8 @@ CMakeFiles/mpc.dir/src/mpc_ltv.cpp.o: ../src/mpc_ltv.cpp \
 /usr/include/eigen3/Eigen/src/SparseCholesky/SimplicialCholesky.h:
 
 /usr/include/eigen3/Eigen/src/SparseCholesky/SimplicialCholesky_impl.h:
+
+/usr/include/eigen3/unsupported/Eigen/src/MatrixFunctions/MatrixFunction.h:
 
 /usr/include/x86_64-linux-gnu/bits/types/struct___jmp_buf_tag.h:
 

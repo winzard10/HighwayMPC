@@ -11,20 +11,21 @@
 // MPC configuration (kept as-is)
 // ---------------------------------
 struct MPCParams {
-    int    N   = 20;
+    int    N   = 200;
     double dt  = 0.1;
     double L   = 2.7;
 
     // weights
-    double wy    = 50.0;
-    double wpsi  = 0.02;
-    double wv    = 0.50;
-    double wR    = 1e-9;
-    double wdd   = 1e-2;   // effort on ddelta
-    double wdR   = 0.00;   // slew R    (u_k - u_{k-1})
-    double wddd  = 0.00;   // slew ddelta
-    double wyf   = 8.0;    // terminal ey
-    double wpsif = 6.0;    // terminal epsi
+    double wy    = 0.25;
+    double wpsi  = 0.10;    // heading error (rad^2)  << much larger than before
+    double wv    = 0.25;
+    double wR    = 1e-5;
+    double wdR   = 1e-5;   // slew R    (u_k - u_{k-1})
+    double wddR  = 2e-5;    // jerk R    (u_k - 2u_{k-1} + u_{k-2})
+    double wdd   = 8.0;   // effort on ddelta
+    double wddd  = 1.0;   // slew ddelta
+    double wyf   = 3.0;    // terminal ey
+    double wpsif = 8.0;    // terminal epsi
 
     // bounds
     // double a_min = -5.0, a_max = 3.0;

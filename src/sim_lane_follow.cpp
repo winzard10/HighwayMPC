@@ -80,8 +80,8 @@ struct Limits {
   // double a_min{-6.0}, a_max{2.5};
 
   // limits from the figure
-  double R_min  = -10000.0;  // N
-  double R_max  =  5500.0;   // N
+  double R_min  = -5000.0;  // N
+  double R_max  =  5000.0;   // N
   double Ffl_max=   5000.0;  // N
   double Frl_max=   5500.0;  // N
 };
@@ -352,8 +352,8 @@ int main(int argc, char** argv) {
 
   // --- Vehicle & MPC ---
   VehicleParams vp; Limits lim; State st;
-  MPCParams mpcp; mpcp.N = 20; mpcp.dt = vp.dt; mpcp.L = vp.L;
-  double d_gap = 150.0;
+  MPCParams mpcp; mpcp.N = 100; mpcp.dt = vp.dt; mpcp.L = vp.L;
+  double d_gap = 150.0;  // initial gap for ACC state
   LTV_MPC mpc(mpcp);
 
   // limits/vehicle
@@ -530,7 +530,7 @@ int main(int argc, char** argv) {
     const double v1        = 33.0;      // cruise
     const double v2        = 20.0;      // after braking
     const double v3        = 28.0;      // lead car accelarates back to v3
-    const double t_brake_s = 10.0, t_brake_e = 20.0, t_end = 40.0;
+    const double t_brake_s = 10.0, t_brake_e = 20.0, t_end = 30.0;
 
     for (int k = 0; k < mpcp.N; ++k) {
       const double tk = t + k*mpcp.dt;
