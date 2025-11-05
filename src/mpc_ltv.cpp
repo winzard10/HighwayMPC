@@ -245,6 +245,7 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         x0(3) = 0.0;                               // vy
         x0(4) = 0.0;                               // dpsi
         x0(5) = 0.0;                               // delta
+        if (P.acc_enable) x0(6) = 0.0;            // gap
 
         // make a 1-step ref view for f_dyn
         MPCRef ref_k;
@@ -277,6 +278,13 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         // affine term: f(x) ≈ A(x-x0) + B(u-u0) + c  ⇒ c = f0 - A x0 - B u0
         d = f0 - A * x0 - B * u0;
 
+        // discretize (ZOH)
+        Eigen::MatrixXd Ad, Bd;
+        Eigen::VectorXd cd;
+        discretizeZOH(A, B, d, P.dt, Ad, Bd, cd);
+
+        lm_.A[k] = Ad; lm_.B[k] = Bd; lm_.c[k] = cd;
+
         if (P.acc_enable) {
             const int id_v = 2;   // v index
             const int id_d = 4;   // distance state index
@@ -287,14 +295,6 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
                             ? ref.v_obj[k]
                             : ref.hp[idx].v_ref;
         }
-
-        // discretize (ZOH)
-        Eigen::MatrixXd Ad, Bd;
-        Eigen::VectorXd cd;
-        discretizeZOH(A, B, d, P.dt, Ad, Bd, cd);
-
-        lm_.A[k] = Ad; lm_.B[k] = Bd; lm_.c[k] = cd;
-  
     }
 
     // nominal containers (optional)
