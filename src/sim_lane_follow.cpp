@@ -36,21 +36,17 @@ static inline double clampAlpha(double a){
   return std::clamp(a, -a_max, a_max);
 }
 
-static inline double slipAngleFront(double vx, double vy, double dpsi,
-                                  double delta, double Lf)
-{
-  const double vx_eff = std::max(0.5, vx);          // low-speed guard
-  const double beta_f = std::atan((vy + Lf * dpsi) / vx_eff);
-  return clampAlpha(delta - beta_f);                // α_f opposes motion
+static inline double slipAngleFront(double vx, double vy, double dpsi, double delta, double Lf){
+  const double vx_eff = std::max(0.1, vx);
+  const double beta_f = std::atan2(vy + Lf * dpsi, vx_eff);
+  return clampAlpha(beta_f - delta);
+}
+static inline double slipAngleRear(double vx, double vy, double dpsi, double Lr){
+  const double vx_eff = std::max(0.1, vx);
+  const double beta_r = std::atan2(vy - Lr * dpsi, vx_eff);
+  return clampAlpha(beta_r);
 }
 
-static inline double slipAngleRear(double vx, double vy, double dpsi,
-                                 double Lr)
-{
-  const double vx_eff = std::max(0.5, vx);
-  const double beta_r = std::atan((vy - Lr * dpsi) / vx_eff);
-  return clampAlpha(-beta_r);
-}
 
 // Pure lateral Magic Formula
 static inline double pacejkaFy(double B,double C,double D,double E,double alpha){
@@ -311,8 +307,8 @@ compute_tire_forces(const State& s, double delta, double R,
   const double Df_wheel = tp.muf * (Fzf_ax * 0.5);
   const double Dr_wheel = tp.mur * (Fzr_ax * 0.5);
 
-  const double Fy_f_ax = 2.0 * pacejkaFy(tp.Bf, tp.Cf, Df_wheel, tp.Ef, alpha_f);
-  const double Fy_r_ax = 2.0 * pacejkaFy(tp.Br, tp.Cr, Dr_wheel, tp.Er, alpha_r);
+  const double Fy_f_ax = - 2.0 * pacejkaFy(tp.Bf, tp.Cf, Df_wheel, tp.Ef, alpha_f);
+  const double Fy_r_ax = - 2.0 * pacejkaFy(tp.Br, tp.Cr, Dr_wheel, tp.Er, alpha_r);
 
   return {Fy_f_ax, Fy_r_ax};
 }
