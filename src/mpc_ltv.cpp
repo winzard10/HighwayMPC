@@ -157,16 +157,17 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         Eigen::VectorXd cd;
         discretizeZOH(A, B, d, P.dt, Ad, Bd, cd);
 
-        if (P.acc_enable) {
-            const int id_v = 2;   // v index
-            const int id_d = 4;   // distance state index
+        // weird ACC state dynamics -> why does this not do anything?
+        // if (P.acc_enable) {
+        //     const int id_v = 2;   // v index
+        //     const int id_d = 4;   // distance state index
         
-            // d_dot = v_obj(k) - v   (treat v_obj piecewise-constant over the sample)
-            A(id_d, id_v) = -1.0;
-            d(id_d)       = (ref.v_obj.size() > (size_t)k)
-                            ? ref.v_obj[k]
-                            : ref.hp[idx].v_ref;
-        }
+        //     // d_dot = v_obj(k) - v   (treat v_obj piecewise-constant over the sample)
+        //     A(id_d, id_v) = -1.0;
+        //     d(id_d)       = (ref.v_obj.size() > (size_t)k)
+        //                     ? ref.v_obj[k]
+        //                     : ref.hp[idx].v_ref;
+        // }
 
         lm_.A[k] = Ad; lm_.B[k] = Bd; lm_.c[k] = cd;
 

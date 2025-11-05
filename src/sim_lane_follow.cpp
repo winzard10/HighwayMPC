@@ -240,7 +240,7 @@ int main(int argc, char** argv) {
   // --- Vehicle & MPC ---
   VehicleParams vp; Limits lim; State st;
   MPCParams mpcp; mpcp.N = 100; mpcp.dt = vp.dt; mpcp.L = vp.L;
-  double d_gap = 250.0;  // initial gap for ACC state
+  double d_gap = 150.0;  // initial gap for ACC state
   LTV_MPC mpc(mpcp);
 
   mpc.setVehicleParams(vp.m, vp.L, vp.d, vp.JG, vp.m0);
@@ -387,7 +387,7 @@ int main(int argc, char** argv) {
     pref.has_obj.resize(mpcp.N);
 
     // Example: start 30 m ahead, lead cruises 22 m/s, then brakes to 10 m/s at t=8–12 s
-    const double v1        = 22.0;      // cruise
+    const double v1        = 33.0;      // cruise
     const double v2        = 20.0;      // after braking
     const double v3        = 28.0;      // lead car accelarates back to v3
     const double t_brake_s = 10.0, t_brake_e = 20.0, t_end = 40.0;
