@@ -157,8 +157,6 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         Eigen::VectorXd cd;
         discretizeZOH(A, B, d, P.dt, Ad, Bd, cd);
 
-        lm_.A[k] = Ad; lm_.B[k] = Bd; lm_.c[k] = cd;
-
         if (P.acc_enable) {
             const int id_v = 2;   // v index
             const int id_d = 4;   // distance state index
@@ -169,6 +167,10 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
                             ? ref.v_obj[k]
                             : ref.hp[idx].v_ref;
         }
+
+        lm_.A[k] = Ad; lm_.B[k] = Bd; lm_.c[k] = cd;
+
+        
     }
 
     // Basic nominal trajectory (zeros except v nominal to last preview)

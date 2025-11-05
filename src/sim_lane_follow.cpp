@@ -240,7 +240,7 @@ int main(int argc, char** argv) {
   // --- Vehicle & MPC ---
   VehicleParams vp; Limits lim; State st;
   MPCParams mpcp; mpcp.N = 100; mpcp.dt = vp.dt; mpcp.L = vp.L;
-  double d_gap = 150.0;  // initial gap for ACC state
+  double d_gap = 250.0;  // initial gap for ACC state
   LTV_MPC mpc(mpcp);
 
   mpc.setVehicleParams(vp.m, vp.L, vp.d, vp.JG, vp.m0);
