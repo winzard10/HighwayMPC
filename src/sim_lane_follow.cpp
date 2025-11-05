@@ -36,20 +36,15 @@ static inline double clampAlpha(double a){
   return std::clamp(a, -a_max, a_max);
 }
 
-static inline double slipAngleFront(double vx, double vy, double dpsi,
-                                  double delta, double Lf)
-{
-  const double vx_eff = std::max(0.5, vx);          // low-speed guard
-  const double beta_f = std::atan((vy + Lf * dpsi) / vx_eff);
-  return clampAlpha(delta - beta_f);                // α_f opposes motion
+inline double slipAngleFront(double vx, double vy, double r, double delta, double Lf){
+  const double vxe = std::max(0.5, vx);
+  const double beta_f = std::atan2(vy + Lf*r, vxe);
+  return beta_f - delta;    // α_f = β_f − δ
 }
-
-static inline double slipAngleRear(double vx, double vy, double dpsi,
-                                 double Lr)
-{
-  const double vx_eff = std::max(0.5, vx);
-  const double beta_r = std::atan((vy - Lr * dpsi) / vx_eff);
-  return clampAlpha(-beta_r);
+inline double slipAngleRear(double vx, double vy, double r, double Lr){
+  const double vxe = std::max(0.5, vx);
+  const double beta_r = std::atan2(vy - Lr*r, vxe);
+  return beta_r;            // α_r = β_r
 }
 
 // Pure lateral Magic Formula
@@ -163,7 +158,7 @@ const double vx_eff  = (std::abs(s.vx) < vx_eps) ? copysign(vx_eps, (s.vx==0.0?1
 const double alpha_f = std::atan2(s.vy + Lf * s.dpsi, vx_eff) - n.delta;
 const double alpha_r = std::atan2(s.vy - Lr * s.dpsi, vx_eff);
 // printf("steering angle = %f rad\n", n.delta);
-printf("vx = %f m/s, vy = %f m/s, dpsi = %f rad/s\n", s.vx, s.vy, s.dpsi);
+// printf("vx = %f m/s, vy = %f m/s, dpsi = %f rad/s\n", s.vx, s.vy, s.dpsi);
 
 // ----- Per-axle normal loads (static for now)
 const double g = 9.81;
@@ -193,7 +188,7 @@ auto clamp_ellipse = [](double& Fx_ax, double& Fy_ax, double mu, double Fz_ax){
 clamp_ellipse(Fx_f_tire, Fy_f_tire, tp.muf, Fzf_ax);
 clamp_ellipse(Fx_r_tire, Fy_r_tire, tp.mur, Fzr_ax);
 
-printf("alpha_f = %f, raw pacejkaFy = %f\n", alpha_f, pacejkaFy(tp.Bf, tp.Cf, Df_wheel, tp.Ef, alpha_f));
+// printf("alpha_f = %f, raw pacejkaFy = %f\n", alpha_f, pacejkaFy(tp.Bf, tp.Cf, Df_wheel, tp.Ef, alpha_f));
 
 // ----- Rotate front axle from tire frame -> body frame
 const double cdel = std::cos(n.delta), sdel = std::sin(n.delta);
@@ -227,6 +222,10 @@ const double ydot = n.vx * spsi + n.vy * cpsi;
 n.x   = s.x + xdot * dt;
 n.y   = s.y + ydot * dt;
 n.psi = wrapAngle(s.psi + n.dpsi * dt);
+
+printf("αf=%.3f αr=%.3f  Fy_f=%.0f Fy_r=%.0f  δ=%.3f  term=-Fy_f*sinδ=%.0f  R=%.0f  ax=%.2f\n",
+  alpha_f, alpha_r, Fy_f_tire, Fy_r_tire, n.delta,
+  -Fy_f_tire*std::sin(n.delta), R_cmd, ax);
 
 // Along-road proxy
 n.s = s.s + std::max(0.0, n.vx) * dt;
@@ -614,6 +613,7 @@ int main(int argc, char** argv) {
     // std::cout << "d_gap = " << d_gap << " m\n";
     // std::cout << "v_ego = " << v_ego_now << " m/s\n";
     // std::cout << "v_lead = " << v_lead_now << " m/s\n";
+    
     std::cout << "----------------\n";
 
     if (!std::isfinite(v_lead_now))
