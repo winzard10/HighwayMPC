@@ -2,6 +2,7 @@
 #include "obstacles.hpp"
 #include "tire_model.hpp"     
 #include "vehicle_model.hpp"  
+#include "acc.hpp"
 
 #include <OsqpEigen/OsqpEigen.h>
 #include <Eigen/Dense>
@@ -83,20 +84,26 @@ void discretizeZOH(const Eigen::MatrixXd& A,
 }
 
 // ------------------------------------------------------------------
-// buildLinearization: simple kinematic bicycle linearization
-// States: [ey, epsi, v, delta], Inputs: [a, ddelta]
-//  ey_dot   ≈ v * epsi
-//  epsi_dot ≈ (v/L) * delta - v * kappa
+// buildLinearization: Dynamic bicycle model with lateral tire slip
+// States: [ey, epsi, vx, vy, r, delta, (d)]
+// Inputs: [R_cmd, ddelta]
+//  ey_dot   ≈ vx*sin(epsi) + vy*cos(epsi)
+//  epsi_dot ≈ r - kappa_ref*vx
+//  vx_dot   = ax
+//  vy_dot   = ay
+//  r_dot    = rdot
 //  v_dot    = a
 //  delta_dot= ddelta
-// Discretization: forward Euler
+//  d_dot    = v_obj - vx   (if ACC enabled)
+// Discretization: Zero-Order Hold (ZOH)
 // ------------------------------------------------------------------
 void LTV_MPC::buildLinearization(const MPCRef& ref) {
     using Eigen::MatrixXd;
     using Eigen::VectorXd;
 
     const int N  = P.N;
-    const int nx = P.acc_enable ? 7 : 6;   // [ey, epsi, vx, vy, dpsi, delta, (d)]
+    const bool ACC_ENABLE = accp_.enable;
+    const int nx = ACC_ENABLE ? 7 : 6;   // [ey, epsi, vx, vy, r, delta, (d)]
     const int nu = 2;                      // [R, ddelta]
 
     // allocate horizon containers
@@ -116,7 +123,7 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         const double vy    = x(3);
         const double r     = x(4);       // yaw-rate = dpsi
         const double delta = x(5);
-        const double d_gap = P.acc_enable ? x(6) : 0.0; (void)d_gap;
+        const double d_gap = ACC_ENABLE ? x(6) : 0.0; (void)d_gap;
 
         // guard near-zero forward speed for slip formulas
         vx = std::max(0.1, vx);
@@ -140,7 +147,7 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         const double v_obj_ref =
             (!ref_k.v_obj.empty() ? ref_k.v_obj[0] : ref_k.hp[0].v_ref);
 
-        VectorXd dx = VectorXd::Zero(P.acc_enable ? 7 : 6);
+        VectorXd dx = VectorXd::Zero(ACC_ENABLE ? 7 : 6);
 
         // Frenet geometry
         dx(0) = vx * std::sin(epsi) + vy * std::cos(epsi);   // e_y_dot
@@ -155,7 +162,7 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         dx(5) = ddelta;                                      // delta dot
 
         // ACC gap dynamics (simple relative-speed integrator)
-        if (P.acc_enable) {
+        if (ACC_ENABLE) {
             dx(6) = v_obj_ref - vx;                          // d_dot
         }
 
@@ -175,7 +182,7 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         x0(3) = 0.0;                               // vy
         x0(4) = 0.0;                               // yaw rate r
         x0(5) = 0.0;                               // delta
-        if (P.acc_enable) x0(6) = 0.0;            // gap
+        if (ACC_ENABLE) x0(6) = 0.0;            // gap
 
         // one-step view for reference fields at stage k
         MPCRef ref_k;
@@ -232,7 +239,7 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         nom_.x[k].vy    = 0.0;
         nom_.x[k].dpsi  = 0.0;
         nom_.x[k].delta = 0.0;
-        if (P.acc_enable) nom_.x[k].d = 0.0;
+        if (ACC_ENABLE) nom_.x[k].d = 0.0;
         if (k < N) nom_.u[k].setZero();
     }
 }
@@ -257,7 +264,8 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     using Eigen::SparseMatrix;
     using Eigen::Triplet;
 
-    const int nx = P.acc_enable ? 7 : 6;   // [ey, epsi, vx, vy, r, delta, (d)]
+    const bool ACC_ENABLE = accp_.enable;
+    const int nx = ACC_ENABLE ? 7 : 6;   // [ey, epsi, vx, vy, r, delta, (d)]
     const int nu = 2;                      // [R, ddelta]
     const int N  = P.N;
 
@@ -268,7 +276,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     constexpr int id_vy    = 3;
     constexpr int id_r     = 4;
     constexpr int id_delta = 5;
-    const int     id_d     = P.acc_enable ? 6 : -1;
+    const int     id_d     = ACC_ENABLE ? 6 : -1;
 
     // stacked decision sizes
     const int NX = (N + 1) * nx;
@@ -407,7 +415,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     beq(row_x0(id_vy))     = x0.vy;     Aeqt.emplace_back(row_x0(id_vy),     idx_x(0, id_vy),     1.0);
     beq(row_x0(id_r))      = x0.dpsi;   Aeqt.emplace_back(row_x0(id_r),      idx_x(0, id_r),      1.0);
     beq(row_x0(id_delta))  = x0.delta;  Aeqt.emplace_back(row_x0(id_delta),  idx_x(0, id_delta),  1.0);
-    if (P.acc_enable) {
+    if (ACC_ENABLE) {
         beq(row_x0(id_d)) = x0.d;
         Aeqt.emplace_back(row_x0(id_d), idx_x(0, id_d), 1.0);
     }
@@ -484,18 +492,19 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     }
 
     // (6) ACC: d >= 0 and time-headway constraint if lead present
-    if (P.acc_enable) {
+    if (ACC_ENABLE) {
         for (int k = 0; k <= N; ++k) {
-            push_row_le(row, idx_x(k, id_d), 1.0, 0.0, +OSQP_INFTY);  // d >= 0
+            push_row_le(row, idx_x(k, id_d), 1.0, 0.0, +OSQP_INFTY);
             ++row;
         }
         for (int k = 0; k < N; ++k) {
             const bool has = (k < (int)ref.has_obj.size()) ? (ref.has_obj[k] != 0) : false;
             if (!has) continue;
-            // d_k - tau * vx_k >= d_min   ⇔  (+1)*d_k + (-tau)*vx_k >= d_min
+    
             Aint.emplace_back(row, idx_x(k, id_d),  +1.0);
-            Aint.emplace_back(row, idx_x(k, id_vx), -P.acc_tau);
-            lin_v.push_back(P.acc_dmin);
+            Aint.emplace_back(row, idx_x(k, id_vx), -accp_.tau);   // <-- see note 2
+            lin_v.push_back(accp_.dmin);                           // <-- see note 2
+            // std::cout << "accp_.dmin: " << accp_.dmin << std::endl;
             uin_v.push_back(+OSQP_INFTY);
             ++row;
         }

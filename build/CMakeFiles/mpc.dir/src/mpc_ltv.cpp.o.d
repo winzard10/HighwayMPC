@@ -512,6 +512,7 @@ CMakeFiles/mpc.dir/src/mpc_ltv.cpp.o: \
  /home/phurithat/Documents/rob590/hwy_mpc/include/obstacles.hpp \
  /home/phurithat/Documents/rob590/hwy_mpc/include/vehicle_model.hpp \
  /home/phurithat/Documents/rob590/hwy_mpc/include/tire_model.hpp \
+ /home/phurithat/Documents/rob590/hwy_mpc/include/acc.hpp \
  /home/phurithat/.local/include/OsqpEigen/OsqpEigen.h \
  /home/phurithat/.local/include/OsqpEigen/Constants.hpp \
  /home/phurithat/.local/include/OsqpEigen/Compat.hpp \

@@ -76,6 +76,17 @@ target_link_libraries(mpc
     dynamics            # <-- needed for tire/vehicle symbols used inside mpc_ltv.cpp
 )
 
+# ===== Library: acc =====
+add_library(acc STATIC
+  src/acc.cpp
+)
+target_include_directories(acc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(acc PUBLIC Eigen3::Eigen)
+
+# Link where needed
+target_link_libraries(mpc PRIVATE acc)
+
+
 # ===== Executable: sim_lane_follow =====
 add_executable(sim_lane_follow
   src/sim_lane_follow.cpp
@@ -88,6 +99,7 @@ target_link_libraries(sim_lane_follow
     corridor_planner
     mpc
     dynamics           # <-- also link dynamics explicitly (sim calls tire/vehicle funcs)
+    acc
     Eigen3::Eigen
 )
 

@@ -9,9 +9,10 @@ struct Params {
   double L{3.4};
   double d{1.6};
   double JG{2500.0};
+  double m0{185.09};
+
   double dt{0.05};
   double track_w{1.7};
-  double m0{185.09};
 };
 
 struct Limits {

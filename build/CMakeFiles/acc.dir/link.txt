@@ -1,0 +1,2 @@
+/usr/bin/ar qc libacc.a CMakeFiles/acc.dir/src/acc.cpp.o
+/usr/bin/ranlib libacc.a

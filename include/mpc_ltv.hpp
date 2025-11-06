@@ -8,13 +8,16 @@
 #include "obstacles.hpp"      // MPCObsSet + compute_lateral_bounds
 #include "vehicle_model.hpp"  // dynamics::vehicle::{Params,Limits}
 #include "tire_model.hpp"     // dynamics::tire::{TireParams,current}
+#include "acc.hpp"            // acc::Params
+
+namespace acc { struct Params; }
 
 // ---------------------------------
 // MPC configuration
 // ---------------------------------
 struct MPCParams {
     int    N   = 200;
-    double dt  = 0.1;
+    double dt;
 
     // weights
     double wy    = 0.25;
@@ -36,11 +39,6 @@ struct MPCParams {
     double ey_up_max = 3.0;
     double ey_lo_max = -3.0;
     double ey_max    = 1.8;   // fallback if no corridor provided
-
-    // ACC options
-    bool   acc_enable{false};
-    double acc_tau{1.4};
-    double acc_dmin{5.0};
 };
 
 // Preview point used by sim
@@ -100,6 +98,10 @@ public:
     void setCorridorBounds(const std::vector<double>& lo,
                            const std::vector<double>& up);
 
+    // ACC 
+    void setACCParams(const acc::Params& p) { accp_ = p; }
+    const acc::Params& accParams() const { return accp_; }
+
     // Nominal warm-start
     void setNominal(const std::vector<MPCState>& x_nom,
                     const std::vector<Eigen::Vector2d>& u_nom) {
@@ -126,6 +128,8 @@ private:
     dynamics::vehicle::Params  vp_{};   // m, L, d, JG, dt
     dynamics::vehicle::Limits  lim_{};  // steering & R bounds
     dynamics::tire::TireParams tp_{};   // B,C,E,mu (front/rear)
+    // acc::Params accp_{ /*enable=*/false, /*tau=*/1.4, /*dmin=*/5.0, /*d_init=*/150.0 };
+    acc::Params accp_{};
 
     struct LinModel {
         std::vector<Eigen::MatrixXd> A;

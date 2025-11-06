@@ -4,6 +4,7 @@
 #include "corridor_planner.hpp"
 #include "vehicle_model.hpp"
 #include "tire_model.hpp"
+#include "acc.hpp"
 
 #include <Eigen/Dense>
 
@@ -178,12 +179,14 @@ int main(int argc, char** argv) {
   VLimits  lim;       // delta_max, ddelta_max, R_min/max, etc.
   VState   st;
   MPCParams mpcp; mpcp.dt = vp.dt;
-  double d_gap = 150.0;  // initial gap for ACC state
-  LTV_MPC mpc(mpcp);
+  acc::reset_defaults();
+  acc::Params accp = acc::Params{};
+  acc::reset_gap(accp);          // sets internal gap to accp.d_init
 
-  // limits/vehicle
+  LTV_MPC mpc(mpcp);
   mpc.setVehicleParams(vp);
   mpc.setLimits(lim);
+  mpc.setACCParams(accp);        // controller now reads accp.enable internally
 
   // NOTE: No tire params set here.
   //       MPC and plant will read from dynamics::tire::current().
@@ -237,13 +240,12 @@ int main(int argc, char** argv) {
     const double ny =  std::cos(psi_ref);
     const double ey   = (st.x - x_ref) * nx + (st.y - y_ref) * ny;
     const double epsi = wrapAngle(st.psi - psi_ref);
-    const double dv   = st.vx - cref.v_ref;
+    // const double dv   = st.vx - cref.v_ref;
 
     // --- MPC preview (reference horizon & corridor frames) ---
     MPCRef pref; pref.hp.resize(mpcp.N);
     std::vector<Eigen::Vector2d>              p_ref_h(mpcp.N);
     std::vector<double>                       psi_ref_h(mpcp.N);
-    std::vector<double>                       v_ref_h(mpcp.N);
     std::vector<double>                       s_grid(mpcp.N);
     std::vector<CenterlineMap::LaneRef>       lane_ref_h(mpcp.N);
     std::vector<double>                       lane_w_h(mpcp.N);
@@ -301,7 +303,7 @@ int main(int argc, char** argv) {
     xk.vy    = st.vy;
     xk.dpsi  = st.dpsi;
     xk.delta = st.delta;
-    xk.d     = d_gap;
+    if (accp.enable) xk.d = acc::gap();
 
     // --- Corridor planning ---
     const double t0     = t;
@@ -323,30 +325,15 @@ int main(int argc, char** argv) {
     mpc.setCorridorBounds(cor.lo, cor.up);
 
     // --- Synthetic lead profile for ACC ---
-    pref.v_obj.resize(mpcp.N);
-    pref.has_obj.resize(mpcp.N);
-
-    const double v1 = 33.0, v2 = 20.0, v3 = 28.0;
-    const double t_brake_s = 10.0, t_brake_e = 20.0, t_end = 30.0;
-
-    for (int ik = 0; ik < mpcp.N; ++ik) {
-      const double tk = t + ik * mpcp.dt;
-      double vlead = v1;
-      if      (tk >= t_brake_s && tk <= t_brake_e) {
-        const double u = (tk - t_brake_s) / (t_brake_e - t_brake_s);
-        vlead = v1 + (v2 - v1) * u;
-      } else if (tk > t_brake_e && tk <= t_end) {
-        const double u = (tk - t_brake_e) / (t_end - t_brake_e);
-        vlead = v2 + (v3 - v2) * u;
-      } else if (tk > t_end) {
-        vlead = v3;
-      }
-      pref.v_obj[ik]  = vlead;
-      pref.has_obj[ik]= 1;
+    if (accp.enable) {
+      pref.v_obj.resize(mpcp.N);
+      pref.has_obj.resize(mpcp.N);
+      acc::fill_preview(pref, t, mpcp.dt, mpcp.N);
+      xk.d = acc::gap();
+    } else {
+      pref.v_obj.clear();
+      pref.has_obj.clear();
     }
-
-    // set initial gap state for ACC
-    xk.d = d_gap;
 
     // --- Solve MPC ---
     MPCControl u_mpc = mpc.solve(xk, pref);
@@ -367,43 +354,24 @@ int main(int argc, char** argv) {
     const double ddelta_cmd = clamp(u_mpc.ddelta, -lim.ddelta_max, lim.ddelta_max);
     const VControl u_cmd{R_cmd, ddelta_cmd};
 
-    // Tire forces now come from centralized params
-    {
-      dynamics::tire::VehicleGeom vg{vp.m, vp.L, vp.d, vp.JG};
-      auto fr = dynamics::tire::computeForcesBody(
-          st.vx, st.vy, st.dpsi, st.delta, u_cmd.R, vg, dynamics::tire::current());
-      // (optional logging with fr)
-    }
-
     // advance plant with tire-slip dynamics using the same centralized params
     st = stepVehicle(st, u_cmd, vp, lim, dynamics::tire::current());
 
     // Stop if we reach end of map
     if (projC.s_proj > map.s_max() - 1.0) break;
+    
+    // --- Update ACC state ---
+    double v_lead_now = std::numeric_limits<double>::quiet_NaN();
+    double d_gap      = std::numeric_limits<double>::quiet_NaN();
 
-    // ego/lead speeds for gap update
-    const double v_ego_now = st.vx;
-    auto lead_speed_now = [&](double t_query){
-      double v = v1;
-      if      (t_query >= t_brake_s && t_query <= t_brake_e) {
-        double u = (t_query - t_brake_s) / (t_brake_e - t_brake_s);
-        v = v1 + (v2 - v1) * u;
-      } else if (t_query > t_brake_e && t_query <= t_end) {
-        double u = (t_query - t_brake_e) / (t_end - t_brake_e);
-        v = v2 + (v3 - v2) * u;
-      } else if (t_query > t_end) {
-        v = v3;
-      }
-      return v;
-    };
-    double v_lead_now = lead_speed_now(t);
-
-    // propagate gap
-    d_gap += mpcp.dt * (v_lead_now - v_ego_now);
-    if (d_gap < 0.0) d_gap = 0.0;
+    if (accp.enable) {
+      v_lead_now = acc::lead_speed(t);
+      acc::update_gap(v_lead_now, st.vx, mpcp.dt);
+      d_gap = acc::gap();
+    }
 
     printf("vx: %.2f m/s, ey: %.2f m, epsi: %.2f rad, R_cmd: %.1f N, ddelta_cmd: %.3f rad/s, d_gap: %.2f m\n",
-           st.vx, ey, epsi, R_cmd, ddelta_cmd, d_gap);
+          st.vx, ey, epsi, R_cmd, ddelta_cmd, d_gap);
     std::cout << "--------------------------------------------\n";
 
     // --- Log ---

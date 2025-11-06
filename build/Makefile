@@ -240,6 +240,19 @@ mpc/fast:
 .PHONY : mpc/fast
 
 #=============================================================================
+# Target rules for targets named acc
+
+# Build rule for target.
+acc: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 acc
+.PHONY : acc
+
+# fast build rule for target.
+acc/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/acc.dir/build.make CMakeFiles/acc.dir/build
+.PHONY : acc/fast
+
+#=============================================================================
 # Target rules for targets named sim_lane_follow
 
 # Build rule for target.
@@ -251,6 +264,30 @@ sim_lane_follow: cmake_check_build_system
 sim_lane_follow/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/sim_lane_follow.dir/build.make CMakeFiles/sim_lane_follow.dir/build
 .PHONY : sim_lane_follow/fast
+
+src/acc.o: src/acc.cpp.o
+.PHONY : src/acc.o
+
+# target to build an object file
+src/acc.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/acc.dir/build.make CMakeFiles/acc.dir/src/acc.cpp.o
+.PHONY : src/acc.cpp.o
+
+src/acc.i: src/acc.cpp.i
+.PHONY : src/acc.i
+
+# target to preprocess a source file
+src/acc.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/acc.dir/build.make CMakeFiles/acc.dir/src/acc.cpp.i
+.PHONY : src/acc.cpp.i
+
+src/acc.s: src/acc.cpp.s
+.PHONY : src/acc.s
+
+# target to generate assembly for a file
+src/acc.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/acc.dir/build.make CMakeFiles/acc.dir/src/acc.cpp.s
+.PHONY : src/acc.cpp.s
 
 src/centerline_map.o: src/centerline_map.cpp.o
 .PHONY : src/centerline_map.o
@@ -456,6 +493,7 @@ help:
 	@echo "... install/strip"
 	@echo "... list_install_components"
 	@echo "... rebuild_cache"
+	@echo "... acc"
 	@echo "... centerline"
 	@echo "... centerline_demo"
 	@echo "... corridor_planner"
@@ -463,6 +501,9 @@ help:
 	@echo "... mpc"
 	@echo "... obstacles"
 	@echo "... sim_lane_follow"
+	@echo "... src/acc.o"
+	@echo "... src/acc.i"
+	@echo "... src/acc.s"
 	@echo "... src/centerline_map.o"
 	@echo "... src/centerline_map.i"
 	@echo "... src/centerline_map.s"
