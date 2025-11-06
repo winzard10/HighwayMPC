@@ -188,30 +188,17 @@ centerline_demo/fast:
 .PHONY : centerline_demo/fast
 
 #=============================================================================
-# Target rules for targets named sim_lane_follow
+# Target rules for targets named dynamics
 
 # Build rule for target.
-sim_lane_follow: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 sim_lane_follow
-.PHONY : sim_lane_follow
+dynamics: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 dynamics
+.PHONY : dynamics
 
 # fast build rule for target.
-sim_lane_follow/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/sim_lane_follow.dir/build.make CMakeFiles/sim_lane_follow.dir/build
-.PHONY : sim_lane_follow/fast
-
-#=============================================================================
-# Target rules for targets named mpc
-
-# Build rule for target.
-mpc: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 mpc
-.PHONY : mpc
-
-# fast build rule for target.
-mpc/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/mpc.dir/build.make CMakeFiles/mpc.dir/build
-.PHONY : mpc/fast
+dynamics/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dynamics.dir/build.make CMakeFiles/dynamics.dir/build
+.PHONY : dynamics/fast
 
 #=============================================================================
 # Target rules for targets named obstacles
@@ -238,6 +225,32 @@ corridor_planner: cmake_check_build_system
 corridor_planner/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/corridor_planner.dir/build.make CMakeFiles/corridor_planner.dir/build
 .PHONY : corridor_planner/fast
+
+#=============================================================================
+# Target rules for targets named mpc
+
+# Build rule for target.
+mpc: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 mpc
+.PHONY : mpc
+
+# fast build rule for target.
+mpc/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/mpc.dir/build.make CMakeFiles/mpc.dir/build
+.PHONY : mpc/fast
+
+#=============================================================================
+# Target rules for targets named sim_lane_follow
+
+# Build rule for target.
+sim_lane_follow: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 sim_lane_follow
+.PHONY : sim_lane_follow
+
+# fast build rule for target.
+sim_lane_follow/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/sim_lane_follow.dir/build.make CMakeFiles/sim_lane_follow.dir/build
+.PHONY : sim_lane_follow/fast
 
 src/centerline_map.o: src/centerline_map.cpp.o
 .PHONY : src/centerline_map.o
@@ -383,6 +396,54 @@ src/sim_lane_follow.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/sim_lane_follow.dir/build.make CMakeFiles/sim_lane_follow.dir/src/sim_lane_follow.cpp.s
 .PHONY : src/sim_lane_follow.cpp.s
 
+src/tire_model.o: src/tire_model.cpp.o
+.PHONY : src/tire_model.o
+
+# target to build an object file
+src/tire_model.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dynamics.dir/build.make CMakeFiles/dynamics.dir/src/tire_model.cpp.o
+.PHONY : src/tire_model.cpp.o
+
+src/tire_model.i: src/tire_model.cpp.i
+.PHONY : src/tire_model.i
+
+# target to preprocess a source file
+src/tire_model.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dynamics.dir/build.make CMakeFiles/dynamics.dir/src/tire_model.cpp.i
+.PHONY : src/tire_model.cpp.i
+
+src/tire_model.s: src/tire_model.cpp.s
+.PHONY : src/tire_model.s
+
+# target to generate assembly for a file
+src/tire_model.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dynamics.dir/build.make CMakeFiles/dynamics.dir/src/tire_model.cpp.s
+.PHONY : src/tire_model.cpp.s
+
+src/vehicle_model.o: src/vehicle_model.cpp.o
+.PHONY : src/vehicle_model.o
+
+# target to build an object file
+src/vehicle_model.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dynamics.dir/build.make CMakeFiles/dynamics.dir/src/vehicle_model.cpp.o
+.PHONY : src/vehicle_model.cpp.o
+
+src/vehicle_model.i: src/vehicle_model.cpp.i
+.PHONY : src/vehicle_model.i
+
+# target to preprocess a source file
+src/vehicle_model.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dynamics.dir/build.make CMakeFiles/dynamics.dir/src/vehicle_model.cpp.i
+.PHONY : src/vehicle_model.cpp.i
+
+src/vehicle_model.s: src/vehicle_model.cpp.s
+.PHONY : src/vehicle_model.s
+
+# target to generate assembly for a file
+src/vehicle_model.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/dynamics.dir/build.make CMakeFiles/dynamics.dir/src/vehicle_model.cpp.s
+.PHONY : src/vehicle_model.cpp.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -398,6 +459,7 @@ help:
 	@echo "... centerline"
 	@echo "... centerline_demo"
 	@echo "... corridor_planner"
+	@echo "... dynamics"
 	@echo "... mpc"
 	@echo "... obstacles"
 	@echo "... sim_lane_follow"
@@ -419,6 +481,12 @@ help:
 	@echo "... src/sim_lane_follow.o"
 	@echo "... src/sim_lane_follow.i"
 	@echo "... src/sim_lane_follow.s"
+	@echo "... src/tire_model.o"
+	@echo "... src/tire_model.i"
+	@echo "... src/tire_model.s"
+	@echo "... src/vehicle_model.o"
+	@echo "... src/vehicle_model.i"
+	@echo "... src/vehicle_model.s"
 .PHONY : help
 
 

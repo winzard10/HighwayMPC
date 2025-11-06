@@ -1,0 +1,2 @@
+/usr/bin/ar qc libdynamics.a CMakeFiles/dynamics.dir/src/vehicle_model.cpp.o CMakeFiles/dynamics.dir/src/tire_model.cpp.o
+/usr/bin/ranlib libdynamics.a

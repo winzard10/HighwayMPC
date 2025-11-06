@@ -574,6 +574,8 @@ CMakeFiles/sim_lane_follow.dir/src/sim_lane_follow.cpp.o
  /usr/include/c++/11/bits/list.tcc
  /usr/include/c++/11/optional
  /home/phurithat/Documents/rob590/hwy_mpc/include/obstacles.hpp
+ /home/phurithat/Documents/rob590/hwy_mpc/include/vehicle_model.hpp
+ /home/phurithat/Documents/rob590/hwy_mpc/include/tire_model.hpp
  /home/phurithat/Documents/rob590/hwy_mpc/include/corridor_planner.hpp
  /usr/include/c++/11/filesystem
  /usr/include/c++/11/bits/fs_fwd.h
