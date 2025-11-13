@@ -37,7 +37,7 @@ def _need(col):
 t      = _need("t")
 x      = _need("x")
 y      = _need("y")
-v      = _need("v")
+v      = _need("vx")
 delta  = _need("delta")
 R_cmd  = _need("R_cmd")
 ddcmd  = _need("ddelta_cmd")
@@ -47,8 +47,8 @@ dv     = _need("dv")
 v_ref  = _need("v_ref")
 x_ref  = _need("x_ref")
 y_ref  = _need("y_ref")
-F_fl   = _need("F_fl")
-F_rl   = _need("F_rl")
+F_fl   = _need("Fy_f")
+F_rl   = _need("Fy_r")
 
 # Optional columns
 psi = df["psi"].values if "psi" in df.columns else None

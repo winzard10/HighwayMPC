@@ -573,6 +573,9 @@ CMakeFiles/sim_lane_follow.dir/src/sim_lane_follow.cpp.o: ../src/sim_lane_follow
   /usr/include/c++/11/bits/list.tcc \
   /usr/include/c++/11/optional \
   ../include/obstacles.hpp \
+  ../include/vehicle_model.hpp \
+  ../include/tire_model.hpp \
+  ../include/acc.hpp \
   ../include/corridor_planner.hpp \
   /usr/include/c++/11/filesystem \
   /usr/include/c++/11/bits/fs_fwd.h \
@@ -644,6 +647,8 @@ CMakeFiles/sim_lane_follow.dir/src/sim_lane_follow.cpp.o: ../src/sim_lane_follow
 /usr/include/c++/11/bits/fs_fwd.h:
 
 /usr/include/c++/11/filesystem:
+
+../include/vehicle_model.hpp:
 
 ../include/obstacles.hpp:
 
@@ -908,6 +913,8 @@ CMakeFiles/sim_lane_follow.dir/src/sim_lane_follow.cpp.o: ../src/sim_lane_follow
 /usr/include/x86_64-linux-gnu/bits/floatn-common.h:
 
 /usr/include/x86_64-linux-gnu/bits/libc-header-start.h:
+
+../include/acc.hpp:
 
 /usr/include/x86_64-linux-gnu/bits/types/struct_itimerspec.h:
 
@@ -1222,6 +1229,8 @@ CMakeFiles/sim_lane_follow.dir/src/sim_lane_follow.cpp.o: ../src/sim_lane_follow
 /usr/include/c++/11/tr1/modified_bessel_func.tcc:
 
 /usr/include/x86_64-linux-gnu/bits/endianness.h:
+
+../include/tire_model.hpp:
 
 /usr/include/c++/11/tr1/poly_laguerre.tcc:
 

@@ -1,5 +1,8 @@
 #include "mpc_ltv.hpp"
 #include "obstacles.hpp"
+#include "tire_model.hpp"     
+#include "vehicle_model.hpp"  
+#include "acc.hpp"
 
 #include <OsqpEigen/OsqpEigen.h>
 #include <Eigen/Dense>
@@ -31,19 +34,13 @@ void LTV_MPC::angleWrap(double& a) {
     while (a >    M_PI) a -= 2.0 * M_PI;
 }
 
-void LTV_MPC::setVehicleParams(double m, double L, double d, double JG, double m0) {
-    m_ = m; L_ = L; d_ = d; JG_ = JG; m0_ = m0;
-    P.L = L_;                // keep heading kinematics consistent
+void LTV_MPC::setVehicleParams(const dynamics::vehicle::Params& vp) {
+    vp_ = vp;
   }
   
-void LTV_MPC::setLimits(double delta_max, double ddelta_max,
-                        double R_min, double R_max,
-                        double Ffl_max, double Frl_max) {
-    delta_max_ = delta_max;
-    ddelta_max_ = ddelta_max;
-    Rmin_ = R_min; Rmax_ = R_max;
-    Ffl_max_ = Ffl_max; Frl_max_ = Frl_max;
-}
+void LTV_MPC::setLimits(const dynamics::vehicle::Limits& L) {
+    lim_ = L;
+  }
 
 void discretizeZOH(const Eigen::MatrixXd& A,
     const Eigen::MatrixXd& B,         // may be (n×0) if no inputs
@@ -87,17 +84,23 @@ void discretizeZOH(const Eigen::MatrixXd& A,
 }
 
 // ------------------------------------------------------------------
-// buildLinearization: simple kinematic bicycle linearization
-// States: [ey, epsi, v, delta], Inputs: [a, ddelta]
-//  ey_dot   ≈ v * epsi
-//  epsi_dot ≈ (v/L) * delta - v * kappa
+// buildLinearization: Dynamic bicycle model with lateral tire slip
+// States: [ey, epsi, vx, vy, r, delta, (d)]
+// Inputs: [R_cmd, ddelta]
+//  ey_dot   ≈ vx*sin(epsi) + vy*cos(epsi)
+//  epsi_dot ≈ r - kappa_ref*vx
+//  vx_dot   = ax
+//  vy_dot   = ay
+//  r_dot    = rdot
 //  v_dot    = a
 //  delta_dot= ddelta
-// Discretization: forward Euler
+//  d_dot    = v_obj - vx   (if ACC enabled)
+// Discretization: Zero-Order Hold (ZOH)
 // ------------------------------------------------------------------
 void LTV_MPC::buildLinearization(const MPCRef& ref) {
     const int N  = P.N;
-    const int nx = P.acc_enable ? 5 : 4;
+    const bool ACC_ENABLE = accp_.enable;
+    const int nx = ACC_ENABLE ? 5 : 4;
     const int nu = 2;
     lm_.A.assign(N, Eigen::MatrixXd::Identity(nx, nx));
     lm_.B.assign(N, Eigen::MatrixXd::Zero(nx, nu));
@@ -108,8 +111,8 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         const double c  = std::cos(delta);
         const double s2 = 1.0/(c*c);           // sec^2
         const double t  = std::tan(delta);
-        const double denom = (m_ + m0_ * t*t);
-        const double coupling = (m0_ * t * s2) * ddelta * v; // Fwind = 0
+        const double denom = (vp_.m + vp_.m0 * t*t);
+        const double coupling = (vp_.m0 * t * s2) * ddelta * v; // Fwind = 0
         return (R - coupling) / denom;                        // Eq.(6)
       };
 
@@ -117,7 +120,7 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         const int idx = std::min<int>(k,(int)ref.hp.size()-1);
         const double vref = idx>=0 ? ref.hp[idx].v_ref : 0.0;
         const double kap  = idx>=0 ? ref.hp[idx].kappa : 0.0;
-        const double deltaref = 0.0;              // you linearize around δ≈0 unless you have a ref
+        const double deltaref = 0.0;
         const double ddref    = 0.0;
         const double Rref     = 0.0;
 
@@ -125,23 +128,19 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         Eigen::MatrixXd B = Eigen::MatrixXd::Zero(nx,  2);
         Eigen::VectorXd d = Eigen::VectorXd::Zero(nx);
 
-        // ey, epsi same as before
+        // ey, epsi kinematics
         A(0,1) = vref;
-        A(1,3) = vref / P.L;
+        A(1,3) = vref / vp_.L;
         A(1,2) = -kap;
         d(1)   = -vref * kap;
 
-        // -------- longitudinal row: finite-diff Jacobian wrt [v,delta] and inputs [R, ddelta]
+        // -------- longitudinal row: finite-diff Jacobian
         const double eps = 1e-6;
         const double f0  = vdot(vref, deltaref, ddref, Rref);
 
-        // ∂f/∂v
         double fv = (vdot(vref+eps, deltaref, ddref, Rref)-f0)/eps;
-        // ∂f/∂δ
         double fdel = (vdot(vref, deltaref+eps, ddref, Rref)-f0)/eps;
-        // ∂f/∂R
         double fR = (vdot(vref, deltaref, ddref, Rref+eps)-f0)/eps;
-        // ∂f/∂(δdot)
         double fdd = (vdot(vref, deltaref, ddref+eps, Rref)-f0)/eps;
 
         A(2,2) = fv;            // v row wrt v
@@ -149,32 +148,30 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         B(2,0) = fR;            // input 0 is R
         B(2,1) = fdd;           // input 1 is ddelta
 
-        // delta_dot = ddelta  (same as before)
+        // delta_dot = ddelta
         B(3,1) = 1.0;
 
-        // discretize (ZOH)
+        // CRITICAL: Add ACC dynamics BEFORE discretization!
+        if (ACC_ENABLE) {
+            const int id_v = 2;   // v index
+            const int id_d = 4;   // distance state index
+        
+            // d_dot = v_obj(k) - v   (treat v_obj piecewise-constant over the sample)
+            A(id_d, id_v) = -1.0;
+            d(id_d)       = (ref.v_obj.size() > (size_t)k)
+                            ? ref.v_obj[k]
+                            : ref.hp[idx].v_ref;
+        }
+
+        // discretize (ZOH) - NOW includes the ACC row
         Eigen::MatrixXd Ad, Bd;
         Eigen::VectorXd cd;
         discretizeZOH(A, B, d, P.dt, Ad, Bd, cd);
 
-        // weird ACC state dynamics -> why does this not do anything?
-        // if (P.acc_enable) {
-        //     const int id_v = 2;   // v index
-        //     const int id_d = 4;   // distance state index
-        
-        //     // d_dot = v_obj(k) - v   (treat v_obj piecewise-constant over the sample)
-        //     A(id_d, id_v) = -1.0;
-        //     d(id_d)       = (ref.v_obj.size() > (size_t)k)
-        //                     ? ref.v_obj[k]
-        //                     : ref.hp[idx].v_ref;
-        // }
-
         lm_.A[k] = Ad; lm_.B[k] = Bd; lm_.c[k] = cd;
-
-        
     }
 
-    // Basic nominal trajectory (zeros except v nominal to last preview)
+    // Basic nominal trajectory
     nom_.x.resize(N+1);
     nom_.u.resize(N);
     for (int k=0; k<=N; ++k) {
@@ -204,11 +201,12 @@ void LTV_MPC::setCorridorBounds(const std::vector<double>& lo,
 // ------------------------------------------------------------------
 MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     // const int nx = 4;   // [ey, epsi, v, delta]
-    const int nx = P.acc_enable ? 5 : 4;   // [ey, epsi, v, delta, (d)]
+    const bool ACC_ENABLE = accp_.enable;
+    const int nx = ACC_ENABLE ? 5 : 4;   // [ey, epsi, v, delta, (d)]
     const int nu = 2;   // [a, ddelta]
     const int N  = P.N;
     const int id_ey = 0, id_epsi = 1, id_v = 2, id_delta = 3;
-    const int id_d  = P.acc_enable ? 4 : -1;
+    const int id_d  = ACC_ENABLE ? 4 : -1;
 
     const int NX = (N+1)*nx;
     const int NU = N*nu;
@@ -368,7 +366,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     beq(row_x0(2)) = x0.v;    Aeqt.emplace_back(row_x0(2), idx_x(0,2), 1.0);
     beq(row_x0(3)) = x0.delta;Aeqt.emplace_back(row_x0(3), idx_x(0,3), 1.0);
 
-    if (P.acc_enable) {
+    if (ACC_ENABLE) {
         beq(row_x0(4)) = x0.d; Aeqt.emplace_back(row_x0(4), idx_x(0,id_d), 1.0);
     }
 
@@ -394,13 +392,13 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
 
     // input box
     for (int k=0; k<N; ++k){
-        push_row_le(row, idx_u(k,0), 1.0, Rmin_, Rmax_);                 ++row; // R
-        push_row_le(row, idx_u(k,1), 1.0, -ddelta_max_, ddelta_max_);    ++row; // δ̇
+        push_row_le(row, idx_u(k, 0), 1.0, lim_.R_min,        lim_.R_max);        ++row;  // R
+        push_row_le(row, idx_u(k, 1), 1.0, -lim_.ddelta_max,  lim_.ddelta_max);   ++row;  // ddelta
     }
     
     // steering angle bounds
     for (int k=0; k<=N; ++k){
-        push_row_le(row, idx_x(k,3), 1.0, -delta_max_, delta_max_);      ++row; // δ
+        push_row_le(row, idx_x(k, id_delta), 1.0, -lim_.delta_max, lim_.delta_max);
     }
 
     // v bounds (optional)
@@ -410,22 +408,17 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
 
     // --- tire force linearized inequalities
     auto force_pair = [&](double v, double delta, double ddelta, double R) {
-        const double c  = std::cos(delta);
-        const double s2 = 1.0 / (c * c);      // sec^2(delta)
-        const double t  = std::tan(delta);
-        const double denom  = (m_ + m0_ * t * t);
-        const double common = (R * t) + (m_ * v * ddelta * s2); // Fwind = 0
+        dynamics::tire::VehicleGeom vg{ vp_.m, vp_.L, vp_.d, vp_.JG, vp_.m0};
+        const auto fr = dynamics::tire::computeForcesBody(
+            v, delta, R, ddelta, vg, /*g=*/9.81);
     
         // From the figure (Eq. 7), with Fwind = 0
-        const double Ffl = (m_ / L_) * t * (1.0 - d_ / L_) * v * v
-                         - ((m0_ - m_ * d_ / L_) / denom) * common;
-    
-        const double Frl = (1.0 / c) * ( (m_ / (L_ * L_)) * d_ * v * v * t
-                                       + (m0_ / denom) * common );
+        const double Ffl = fr.Fy_f_body;
+        const double Frl = fr.Fy_r_body;
     
         return std::pair<double,double>(Ffl, Frl); // {front, rear}
     };
-    
+
     auto force_jac = [&](double v, double delta, double ddelta, double R) {
         const double eps = 1e-6;
         auto F0   = force_pair(v, delta, ddelta, R);
@@ -485,12 +478,12 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
             ++row;
         };
     
-        push_affine(0, Ffl_max_);  // front
-        push_affine(1, Frl_max_);  // rear
+        push_affine(0, lim_.Ffl_max);  // front
+        push_affine(1, lim_.Frl_max);  // rear
     }
 
     // Gap lower bound d >= 0 (optional but nice to keep feasibility)
-    if (P.acc_enable){
+    if (ACC_ENABLE){
         for (int k=0; k<=N; ++k){
             push_row_le(row, idx_x(k,id_d), 1.0, 0.0, +OSQP_INFTY); ++row;
         }
@@ -500,8 +493,8 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
             if (!has) continue;
             // Aineq[row, id_d] = +1, Aineq[row, id_v] = -tau
             Aint.emplace_back(row, idx_x(k,id_d),  +1.0);
-            Aint.emplace_back(row, idx_x(k,id_v),  -P.acc_tau);
-            lin_v.push_back(P.acc_dmin);
+            Aint.emplace_back(row, idx_x(k,id_v),  -accp_.tau);
+            lin_v.push_back(accp_.dmin);
             uin_v.push_back(+OSQP_INFTY);
             ++row;
         }

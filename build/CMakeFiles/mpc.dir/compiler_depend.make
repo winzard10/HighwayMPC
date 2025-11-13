@@ -572,6 +572,9 @@ CMakeFiles/mpc.dir/src/mpc_ltv.cpp.o: ../src/mpc_ltv.cpp \
   /usr/include/c++/11/bits/list.tcc \
   /usr/include/c++/11/optional \
   ../include/obstacles.hpp \
+  ../include/vehicle_model.hpp \
+  ../include/tire_model.hpp \
+  ../include/acc.hpp \
   /home/phurithat/.local/include/OsqpEigen/OsqpEigen.h \
   /home/phurithat/.local/include/OsqpEigen/Constants.hpp \
   /home/phurithat/.local/include/OsqpEigen/Compat.hpp \
@@ -673,6 +676,8 @@ CMakeFiles/mpc.dir/src/mpc_ltv.cpp.o: ../src/mpc_ltv.cpp \
 /home/phurithat/.local/include/osqp/osqp.h:
 
 /home/phurithat/.local/include/OsqpEigen/Compat.hpp:
+
+../include/vehicle_model.hpp:
 
 ../include/obstacles.hpp:
 
@@ -965,6 +970,8 @@ CMakeFiles/mpc.dir/src/mpc_ltv.cpp.o: ../src/mpc_ltv.cpp \
 /usr/include/x86_64-linux-gnu/bits/floatn-common.h:
 
 /usr/include/x86_64-linux-gnu/bits/struct_mutex.h:
+
+../include/acc.hpp:
 
 /usr/include/x86_64-linux-gnu/bits/types/struct_itimerspec.h:
 
@@ -1275,6 +1282,8 @@ CMakeFiles/mpc.dir/src/mpc_ltv.cpp.o: ../src/mpc_ltv.cpp \
 /usr/include/eigen3/Eigen/src/SparseCore/AmbiVector.h:
 
 /usr/include/c++/11/cstdlib:
+
+../include/tire_model.hpp:
 
 /usr/include/c++/11/tr1/poly_laguerre.tcc:
 

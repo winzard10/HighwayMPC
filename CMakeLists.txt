@@ -16,31 +16,26 @@ else()
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-# ===== Tell CMake where you installed packages (~/.local) =====
-# This is where `cmake --install` put osqp + OsqpEigen from Option A.
+# ===== Prefix for locally installed packages =====
 list(APPEND CMAKE_PREFIX_PATH "$ENV{HOME}/.local")
 
-# ===== Dependencies (use installed packages) =====
-# Eigen3
+# ===== Dependencies =====
 find_package(Eigen3 QUIET NO_MODULE)
 if (NOT Eigen3_FOUND)
-  # Fallback include path used on Ubuntu if libeigen3-dev is present
   message(STATUS "Eigen3 not found via package config; falling back to /usr/include/eigen3")
   add_library(Eigen3::Eigen INTERFACE IMPORTED)
   set_target_properties(Eigen3::Eigen PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "/usr/include/eigen3")
 endif()
 
-# OsqpEigen (this also finds the installed osqp via its config files)
-find_package(OsqpEigen REQUIRED)         # from ~/.local
-# -> Provides target: OsqpEigen::OsqpEigen
+find_package(OsqpEigen REQUIRED) # provides OsqpEigen::OsqpEigen
 
 # ===== Library: centerline =====
 add_library(centerline STATIC
   src/centerline_map.cpp
 )
 target_include_directories(centerline PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(centerline PUBLIC Eigen3::Eigen) 
+target_link_libraries(centerline PUBLIC Eigen3::Eigen)
 
 # ===== Executable: centerline_demo =====
 add_executable(centerline_demo
@@ -48,49 +43,65 @@ add_executable(centerline_demo
 )
 target_link_libraries(centerline_demo PRIVATE centerline)
 
-# ===== Executable: sim_lane_follow =====
-add_executable(sim_lane_follow
-  src/sim_lane_follow.cpp
+# ===== Library: dynamics (vehicle + tire) =====
+add_library(dynamics STATIC
+  src/vehicle_model.cpp
+  src/tire_model.cpp
 )
-target_link_libraries(sim_lane_follow PRIVATE centerline)
+target_include_directories(dynamics PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(dynamics PUBLIC Eigen3::Eigen)
+
+# ===== Library: obstacles =====
+add_library(obstacles STATIC
+  src/obstacles.cpp
+)
+target_include_directories(obstacles PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+# ===== Library: corridor_planner =====
+add_library(corridor_planner STATIC
+  src/corridor_planner.cpp
+)
+target_include_directories(corridor_planner PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(corridor_planner PUBLIC Eigen3::Eigen)
 
 # ===== Library: mpc (LTV-MPC using OsqpEigen) =====
 add_library(mpc STATIC
   src/mpc_ltv.cpp
 )
 target_include_directories(mpc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-# NOTE: PUBLIC so Eigen’s include path propagates to sim_lane_follow (which includes mpc headers)
-target_link_libraries(mpc PUBLIC Eigen3::Eigen OsqpEigen::OsqpEigen)
-
-# Attach MPC to simulator
-target_link_libraries(sim_lane_follow PRIVATE mpc)
-
-# ===== Library: obstacles =====
-add_library(obstacles STATIC
-  src/obstacles.cpp
-)
-target_include_directories(obstacles PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
+target_link_libraries(mpc
+  PUBLIC
+    Eigen3::Eigen
+    OsqpEigen::OsqpEigen
+    dynamics            # <-- needed for tire/vehicle symbols used inside mpc_ltv.cpp
 )
 
-# Link it into the sim
-target_link_libraries(sim_lane_follow PRIVATE obstacles)
-
-# ===== Library: corridor_planner =====
-add_library(corridor_planner STATIC
-  src/corridor_planner.cpp
+# ===== Library: acc =====
+add_library(acc STATIC
+  src/acc.cpp
 )
+target_include_directories(acc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(acc PUBLIC Eigen3::Eigen)
 
-# Make the header(s) visible to anything that links against it
-target_include_directories(corridor_planner PUBLIC
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
+# Link where needed
+target_link_libraries(mpc PRIVATE acc)
+
+
+# ===== Executable: sim_lane_follow =====
+add_executable(sim_lane_follow
+  src/sim_lane_follow.cpp
 )
-
-# Corridor planner depends on Eigen
-target_link_libraries(corridor_planner PUBLIC Eigen3::Eigen)
-
-# Link it into the sim
-target_link_libraries(sim_lane_follow PRIVATE corridor_planner)
+target_include_directories(sim_lane_follow PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(sim_lane_follow
+  PRIVATE
+    centerline
+    obstacles
+    corridor_planner
+    mpc
+    dynamics           # <-- also link dynamics explicitly (sim calls tire/vehicle funcs)
+    acc
+    Eigen3::Eigen
+)
 
 # ===== Data handling =====
 set(HWY_MPC_DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/data")
@@ -111,7 +122,6 @@ add_custom_command(TARGET sim_lane_follow POST_BUILD
   COMMENT "Copying data/ next to sim_lane_follow"
 )
 
-# Optional runtime macro for installed layout
 target_compile_definitions(centerline_demo PRIVATE HWY_MPC_INSTALLED_DATA_SUBDIR="share/hwy_mpc/data")
 target_compile_definitions(sim_lane_follow  PRIVATE HWY_MPC_INSTALLED_DATA_SUBDIR="share/hwy_mpc/data")
 

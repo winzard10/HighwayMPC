@@ -93,9 +93,11 @@ sim_lane_follow_EXTERNAL_OBJECTS =
 sim_lane_follow: CMakeFiles/sim_lane_follow.dir/src/sim_lane_follow.cpp.o
 sim_lane_follow: CMakeFiles/sim_lane_follow.dir/build.make
 sim_lane_follow: libcenterline.a
-sim_lane_follow: libmpc.a
 sim_lane_follow: libobstacles.a
 sim_lane_follow: libcorridor_planner.a
+sim_lane_follow: libmpc.a
+sim_lane_follow: libdynamics.a
+sim_lane_follow: libacc.a
 sim_lane_follow: /home/phurithat/.local/lib/libOsqpEigen.so.0.10.3
 sim_lane_follow: /home/phurithat/.local/lib/libosqp.so
 sim_lane_follow: CMakeFiles/sim_lane_follow.dir/link.txt
