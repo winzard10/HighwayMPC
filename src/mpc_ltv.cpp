@@ -97,7 +97,7 @@ void discretizeZOH(const Eigen::MatrixXd& A,
 //  d_dot    = v_obj - vx   (if ACC enabled)
 // Discretization: Zero-Order Hold (ZOH)
 // ------------------------------------------------------------------
-void LTV_MPC::buildLinearization(const MPCRef& ref) {
+void LTV_MPC::buildLinearization(const MPCState& x, const MPCRef& ref) {
     using Eigen::MatrixXd;
     using Eigen::VectorXd;
 
@@ -164,6 +164,7 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         // ACC gap dynamics (simple relative-speed integrator)
         if (ACC_ENABLE) {
             dx(6) = v_obj_ref - vx;                          // d_dot
+            // std::cout << "v_obj_ref: " << v_obj_ref << ", vx: " << vx << ", dx(6): " << dx(6) << std::endl;
         }
 
         (void)ey; // used in kinematics above; silence warnings in some builds
@@ -183,6 +184,12 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         x0(4) = 0.0;                               // yaw rate r
         x0(5) = 0.0;                               // delta
         if (ACC_ENABLE) x0(6) = 0.0;            // gap
+
+        // x0(2) = std::max(0.0, x.vx);  // vx nominal
+        // x0(3) = 0.0;                               // vy
+        // x0(4) = 0.0;                               // yaw rate r
+        // x0(5) = 0.0;                               // delta
+        // if (ACC_ENABLE) x0(6) = x.d;            // gap
 
         // one-step view for reference fields at stage k
         MPCRef ref_k;
@@ -417,6 +424,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     beq(row_x0(id_delta))  = x0.delta;  Aeqt.emplace_back(row_x0(id_delta),  idx_x(0, id_delta),  1.0);
     if (ACC_ENABLE) {
         beq(row_x0(id_d)) = x0.d;
+        // std::cout << "x0.d: " << x0.d << std::endl;
         Aeqt.emplace_back(row_x0(id_d), idx_x(0, id_d), 1.0);
     }
 

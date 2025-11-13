@@ -71,6 +71,8 @@
         "thread": "cpp",
         "typeindex": "cpp",
         "variant": "cpp",
-        "filesystem": "cpp"
+        "filesystem": "cpp",
+        "iterativelinearsolvers": "cpp",
+        "matrixfunctions": "cpp"
     }
 }
