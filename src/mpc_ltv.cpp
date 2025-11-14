@@ -90,7 +90,6 @@ void discretizeZOH(const Eigen::MatrixXd& A,
 //  epsi_dot ≈ (v/L) * delta - v * kappa
 //  v_dot    = a
 //  delta_dot= ddelta
-//  d_dot    = v_obj - vx   (if ACC enabled)
 // Discretization: Zero-Order Hold (ZOH)
 // ------------------------------------------------------------------
 void LTV_MPC::buildLinearization(const MPCRef& ref) {
@@ -116,7 +115,7 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         const int idx = std::min<int>(k,(int)ref.hp.size()-1);
         const double vref = idx>=0 ? ref.hp[idx].v_ref : 0.0;
         const double kap  = idx>=0 ? ref.hp[idx].kappa : 0.0;
-        const double deltaref = 0.0;
+        const double deltaref = 0.0;              // you linearize around δ≈0 unless you have a ref
         const double ddref    = 0.0;
         const double Rref     = 0.0;
 
@@ -124,19 +123,23 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         Eigen::MatrixXd B = Eigen::MatrixXd::Zero(nx,  2);
         Eigen::VectorXd d = Eigen::VectorXd::Zero(nx);
 
-        // ey, epsi kinematics
+        // ey, epsi same as before
         A(0,1) = vref;
         A(1,3) = vref / vp_.L;
         A(1,2) = -kap;
         d(1)   = -vref * kap;
 
-        // -------- longitudinal row: finite-diff Jacobian
+        // -------- longitudinal row: finite-diff Jacobian wrt [v,delta] and inputs [R, ddelta]
         const double eps = 1e-6;
         const double f0  = vdot(vref, deltaref, ddref, Rref);
 
+        // ∂f/∂v
         double fv = (vdot(vref+eps, deltaref, ddref, Rref)-f0)/eps;
+        // ∂f/∂δ
         double fdel = (vdot(vref, deltaref+eps, ddref, Rref)-f0)/eps;
+        // ∂f/∂R
         double fR = (vdot(vref, deltaref, ddref, Rref+eps)-f0)/eps;
+        // ∂f/∂(δdot)
         double fdd = (vdot(vref, deltaref, ddref+eps, Rref)-f0)/eps;
 
         A(2,2) = fv;            // v row wrt v
@@ -144,10 +147,9 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         B(2,0) = fR;            // input 0 is R
         B(2,1) = fdd;           // input 1 is ddelta
 
-        // delta_dot = ddelta
+        // delta_dot = ddelta  (same as before)
         B(3,1) = 1.0;
 
-        // CRITICAL: Add ACC dynamics BEFORE discretization!
         if (ACC_ENABLE) {
             const int id_v = 2;   // v index
             const int id_d = 4;   // distance state index
@@ -158,16 +160,16 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
                             ? ref.v_obj[k]
                             : ref.hp[idx].v_ref;
         }
-
-        // discretize (ZOH) - NOW includes the ACC row
+        
+        // discretize (ZOH)
         Eigen::MatrixXd Ad, Bd;
         Eigen::VectorXd cd;
         discretizeZOH(A, B, d, P.dt, Ad, Bd, cd);
 
-        lm_.A[k] = Ad; lm_.B[k] = Bd; lm_.c[k] = cd;
+        lm_.A[k] = Ad; lm_.B[k] = Bd; lm_.c[k] = cd;    
     }
 
-    // Basic nominal trajectory
+    // Basic nominal trajectory (zeros except v nominal to last preview)
     nom_.x.resize(N+1);
     nom_.u.resize(N);
     for (int k=0; k<=N; ++k) {
@@ -203,8 +205,6 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     const int N  = P.N;
     const int id_ey = 0, id_epsi = 1, id_v = 2, id_delta = 3;
     const int id_d  = ACC_ENABLE ? 4 : -1;
-
-    std::cout << "x0: ey=" << x0.ey << " epsi=" << x0.epsi << " v=" << x0.v << " delta=" << x0.delta << "\n";
 
     const int NX = (N+1)*nx;
     const int NU = N*nu;
@@ -388,16 +388,14 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
 
     // input box
     for (int k=0; k<N; ++k){
-        push_row_le(row, idx_u(k, 0), 1.0, lim_.R_min,        lim_.R_max);        ++row;  // R
-        push_row_le(row, idx_u(k, 1), 1.0, -lim_.ddelta_max,  lim_.ddelta_max);   ++row;  // ddelta
+        push_row_le(row, idx_u(k,0), 1.0, lim_.R_min, lim_.R_max);               ++row; // R
+        push_row_le(row, idx_u(k,1), 1.0, -lim_.ddelta_max, lim_.ddelta_max);    ++row; // δ̇
     }
     
     // steering angle bounds
     for (int k=0; k<=N; ++k){
-        push_row_le(row, idx_x(k, id_delta), 1.0, -lim_.delta_max, lim_.delta_max);
+        push_row_le(row, idx_x(k,3), 1.0, -lim_.delta_max, lim_.delta_max);      ++row; // δ
     }
-
-    std::cout << "lim_.delta_max = " << lim_.delta_max << "lim_.ddelta_max = " << lim_.ddelta_max << "\n";
 
     // v bounds (optional)
     for (int k=0; k<=N; ++k){
@@ -408,15 +406,10 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     auto force_pair = [&](double v, double delta, double ddelta, double R) {
         dynamics::tire::VehicleGeom vg{ vp_.m, vp_.L, vp_.d, vp_.JG, vp_.m0};
         const auto fr = dynamics::tire::computeForcesBody(
-            v, delta, R, ddelta, vg, /*g=*/9.81);
-    
-        // From the figure (Eq. 7), with Fwind = 0
-        const double Ffl = fr.Fy_f_body;
-        const double Frl = fr.Fy_r_body;
-    
-        return std::pair<double,double>(Ffl, Frl); // {front, rear}
+            v, delta, R, ddelta, vg, /*g=*/9.81);     
+        return std::pair<double,double>(fr.Fy_f_body, fr.Fy_r_body); // {front, rear}
     };
-
+    
     auto force_jac = [&](double v, double delta, double ddelta, double R) {
         const double eps = 1e-6;
         auto F0   = force_pair(v, delta, ddelta, R);
@@ -447,7 +440,6 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
         const double Ffl0 = FJ.first.first;      // front force at ref
         const double Frl0 = FJ.first.second;     // rear  force at ref
         const auto&  J    = FJ.second;           // 2x4 jacobian
-        std::cout << "Step " << k << ": Ffl0=" << Ffl0 << " Frl0=" << Frl0 << "\n";
     
         // helper to push one affine inequality: alpha*z <= beta
         auto push_affine = [&](int which, double Fmax){

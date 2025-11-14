@@ -18,7 +18,7 @@ struct Params {
 struct Limits {
   double delta_max{0.5};
   double ddelta_max{0.7};
-  double R_min{-10000.0};
+  double R_min{-5000.0};
   double R_max{ 5000.0};
   double Ffl_max{5000.0};
   double Frl_max{5500.0};
