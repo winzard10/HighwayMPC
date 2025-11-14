@@ -237,7 +237,7 @@ int main(int argc, char** argv) {
     const double ny =  std::cos(psi_ref);
     const double ey   = (st.x - x_ref) * nx + (st.y - y_ref) * ny;
     const double epsi = wrapAngle(st.psi - psi_ref);
-    // const double dv   = st.v - cref.v_ref;
+    const double dv   = st.v - cref.v_ref;
 
     // --- MPC preview (reference horizon & corridor frames) ---
     MPCRef pref; pref.hp.resize(mpcp.N);
@@ -375,10 +375,12 @@ int main(int argc, char** argv) {
     auto fr_now = dynamics::tire::computeForcesBody(
         st.v, st.delta, u_cmd.R, u_cmd.ddelta, vg);
 
+    std::cout << "Ffy: " << fr_now.Fy_f_body << ", Fyr: " << fr_now.Fy_r_body << "\n";
+
     log << t << "," << projC.s_proj << "," << st.x << "," << st.y << ","
         << st.psi << "," << st.v << "," << -1.0 << "," << -1.0 << "," << st.delta << ","
         << u_cmd.R << "," << u_cmd.ddelta << ","
-        << ey << "," << epsi << "," << (st.v - cref.v_ref) << ","
+        << ey << "," << epsi << "," << dv << ","
         << cref.v_ref << "," << x_ref << "," << y_ref << "," << psi_ref << ","
         << alpha << "," << dmin << "," << v_lead_now << "," << d_gap << ","
         << fr_now.Fy_f_body << "," << fr_now.Fy_r_body << "\n";

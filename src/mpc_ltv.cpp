@@ -204,6 +204,8 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     const int id_ey = 0, id_epsi = 1, id_v = 2, id_delta = 3;
     const int id_d  = ACC_ENABLE ? 4 : -1;
 
+    std::cout << "x0: ey=" << x0.ey << " epsi=" << x0.epsi << " v=" << x0.v << " delta=" << x0.delta << "\n";
+
     const int NX = (N+1)*nx;
     const int NU = N*nu;
     const int NZ = NX + NU;
@@ -395,6 +397,8 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
         push_row_le(row, idx_x(k, id_delta), 1.0, -lim_.delta_max, lim_.delta_max);
     }
 
+    std::cout << "lim_.delta_max = " << lim_.delta_max << "lim_.ddelta_max = " << lim_.ddelta_max << "\n";
+
     // v bounds (optional)
     for (int k=0; k<=N; ++k){
         push_row_le(row, idx_x(k,2), 1.0, P.v_min, P.v_max); ++row;
@@ -443,6 +447,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
         const double Ffl0 = FJ.first.first;      // front force at ref
         const double Frl0 = FJ.first.second;     // rear  force at ref
         const auto&  J    = FJ.second;           // 2x4 jacobian
+        std::cout << "Step " << k << ": Ffl0=" << Ffl0 << " Frl0=" << Frl0 << "\n";
     
         // helper to push one affine inequality: alpha*z <= beta
         auto push_affine = [&](int which, double Fmax){

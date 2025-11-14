@@ -57,10 +57,10 @@ ForceResult computeForcesBody(double v,
   const double common = (R_rear * t) + (vg.m * v * ddelta * s2); // Fwind = 0
 
   // From the figure (Eq. 7), with Fwind = 0
-  const double Ffl = (vg.m / vg.L) * t * (1.0 - vg.d / vg.L) * v * v
+  const double Frl = (vg.m / vg.L) * t * (1.0 - vg.d / vg.L) * v * v
                     - ((vg.m0 - vg.m * vg.d / vg.L) / denom) * common;
 
-  const double Frl = (1.0 / c) * ( (vg.m / (vg.L * vg.L)) * vg.d * v * v * t
+  const double Ffl = (1.0 / c) * ( (vg.m / (vg.L * vg.L)) * vg.d * v * v * t
                                   + (vg.m0 / denom) * common );
 
   out.Fy_f_body = Ffl;

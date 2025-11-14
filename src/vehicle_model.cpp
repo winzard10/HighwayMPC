@@ -34,21 +34,21 @@ State step(const State& s, const Control& u,
   const double t  = std::tan(s.delta);
   
   // For numerical stability, limit tan(delta)
-  const double t_safe = clamp(t, -3.0, 3.0);
+  // const double t_safe = clamp(t, -3.0, 3.0);
   
-  const double denom = (vp.m + vp.m0 * t_safe * t_safe);
+  const double denom = (vp.m + vp.m0 * t * t);
   
   // Coupling term: m₀ * tan(δ) * sec²(δ) * δ̇ * σ
-  const double coupling = (vp.m0 * t_safe * s2) * ddelta * s.v;
+  const double coupling = (vp.m0 * t * s2) * ddelta * s.v;
   
   // F_wind = 0 in your case
   const double F_wind = 0.0;
   
   // Solve for longitudinal acceleration from Eq. (6)
-  const double a_eff = (R_cmd - F_wind - coupling) / std::max(1e-3, denom);
+  const double a_eff = (R_cmd - F_wind - coupling) / denom;
   
   // Safety check for extreme accelerations
-  const double a_clamped = clamp(a_eff, -10.0, 10.0);  // reasonable limits
+  // const double a_clamped = clamp(a_eff, -10.0, 10.0);  // reasonable limits
   
   if (std::abs(a_eff) > 15.0) {
     std::cerr << "WARNING: Extreme acceleration " << a_eff 
@@ -57,7 +57,7 @@ State step(const State& s, const Control& u,
   }
   
   // integrate longitudinal velocity (Eq. 5: σ̇ = u)
-  n.v = std::max(0.0, s.v + a_clamped * dt);
+  n.v = std::max(0.0, s.v + a_eff * dt);
   
   // Kinematic bicycle model for pose (Eq. 5)
   // Use CURRENT state values for consistent integration (forward Euler)

@@ -13,13 +13,13 @@ struct Params {
     bool   enable{true};
     double tau{1.4};
     double dmin{5.0};
-    double d_init{300.0}; 
+    double d_init{150.0}; 
 };
 
 // ---------- Lead profile ----------
 struct PiecewiseLead {
     double v1{33.0}, v2{20.0}, v3{28.0};
-    double t1{10.0}, t2{20.0}, t3{30.0};
+    double t1{10.0}, t2{20.0}, t3{40.0};
 };
 
 // Module initialization

@@ -16,7 +16,7 @@ namespace acc { struct Params; }
 // MPC configuration
 // ---------------------------------
 struct MPCParams {
-    int    N   = 200;
+    int    N   = 100;
     double dt;
 
     // weights
@@ -32,8 +32,6 @@ struct MPCParams {
     double wpsif = 8.0;
 
     // bounds
-    double ddelta_max = 0.25;
-    double delta_max  = 0.40;
     double v_min = 0.0,  v_max = 40.0;
 
     double ey_up_max = 3.0;
