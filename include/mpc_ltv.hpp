@@ -20,9 +20,9 @@ struct MPCParams {
     double dt;
 
     // weights
-    double wy    = 10.0;
+    double wy    = 0.25;
     double wpsi  = 0.10;
-    double wv    = 1.0;
+    double wv    = 0.25;
     double wR    = 1e-5;
     double wdR   = 1e-5;
     double wddR  = 2e-5;

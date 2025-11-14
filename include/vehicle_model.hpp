@@ -11,7 +11,7 @@ struct Params {
   double JG{2500.0};
   double m0{185.09};
 
-  double dt{0.05};
+  double dt{0.1};
   double track_w{1.7};
 };
 

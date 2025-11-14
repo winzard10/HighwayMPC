@@ -195,7 +195,7 @@ int main(int argc, char** argv) {
   {
     LanePose p0 = lanePoseAt(map, st.s, cli.lane_from);
     st.x = p0.x; st.y = p0.y; st.psi = p0.psi;
-    st.v = 25.0;
+    st.v = 20.0;
     st.delta = 0.0;
   }
 

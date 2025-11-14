@@ -84,14 +84,10 @@ void discretizeZOH(const Eigen::MatrixXd& A,
 }
 
 // ------------------------------------------------------------------
-// buildLinearization: Dynamic bicycle model with lateral tire slip
-// States: [ey, epsi, vx, vy, r, delta, (d)]
-// Inputs: [R_cmd, ddelta]
-//  ey_dot   ≈ vx*sin(epsi) + vy*cos(epsi)
-//  epsi_dot ≈ r - kappa_ref*vx
-//  vx_dot   = ax
-//  vy_dot   = ay
-//  r_dot    = rdot
+// buildLinearization: simple kinematic bicycle linearization
+// States: [ey, epsi, v, delta], Inputs: [a, ddelta]
+//  ey_dot   ≈ v * epsi
+//  epsi_dot ≈ (v/L) * delta - v * kappa
 //  v_dot    = a
 //  delta_dot= ddelta
 //  d_dot    = v_obj - vx   (if ACC enabled)
@@ -237,8 +233,6 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     } else {
         // fallback to global road bounds if no corridor provided
         for (int k = 0; k < N; ++k) {
-            // ey_lower[k] = -P.ey_max;
-            // ey_upper[k] = +P.ey_max;
             ey_lower[k] = -P.ey_max;
             ey_upper[k] = +P.ey_max;
         }
