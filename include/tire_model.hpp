@@ -19,10 +19,10 @@ void set(const TireParams&);
 
 // -------- Vehicle geometry used by tire model --------
 struct VehicleGeom {
-  double m{660.0};
-  double L{3.4};
-  double d{1.6};
-  double JG{2500.0};
+  double m;
+  double L;
+  double d;
+  double JG;
 };
 
 // -------- Output forces --------

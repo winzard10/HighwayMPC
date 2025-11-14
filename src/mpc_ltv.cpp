@@ -359,10 +359,10 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
 
     // optional propulsion jerk: (R_k - 2R_{k-1} + R_{k-2})^2
     if (P.wddR > 0.0) {
-        for (int k = 2; k < N; ++k) {
-            const int Rk   = idx_u(k, 0);
-            const int Rkm1 = idx_u(k - 1, 0);
-            const int Rkm2 = idx_u(k - 2, 0);
+        for (int kk = 2; kk < N; ++kk) {
+            const int Rk   = idx_u(kk, 0);
+            const int Rkm1 = idx_u(kk - 1, 0);
+            const int Rkm2 = idx_u(kk - 2, 0);
             const double a = 1.0, b = -2.0, c = 1.0;
             const double s = 2.0 * P.wddR;
             Ht.emplace_back(Rk,   Rk,   s * a * a);
