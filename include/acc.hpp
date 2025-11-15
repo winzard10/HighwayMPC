@@ -19,7 +19,7 @@ struct Params {
 // ---------- Lead profile ----------
 struct PiecewiseLead {
     double v1{33.0}, v2{20.0}, v3{28.0};
-    double t1{10.0}, t2{20.0}, t3{30.0};
+    double t1{10.0}, t2{20.0}, t3{40.0};
 };
 
 // Module initialization

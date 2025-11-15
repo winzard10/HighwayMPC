@@ -109,12 +109,12 @@ public:
     }
 
     // Model + QP
-    void        buildLinearization(const MPCState& x0, const MPCRef& ref);
+    void        buildLinearization(const MPCRef& ref);
     MPCControl  solveQP(const MPCState& x0, const MPCRef& ref);
 
     // Convenience wrapper
     MPCControl solve(const MPCState& x0, const MPCRef& ref) {
-        buildLinearization(x0, ref);
+        buildLinearization(ref);
         return solveQP(x0, ref);
     }
 

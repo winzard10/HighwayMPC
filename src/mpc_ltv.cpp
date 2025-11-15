@@ -97,7 +97,7 @@ void discretizeZOH(const Eigen::MatrixXd& A,
 //  d_dot    = v_obj - vx   (if ACC enabled)
 // Discretization: Zero-Order Hold (ZOH)
 // ------------------------------------------------------------------
-void LTV_MPC::buildLinearization(const MPCState& x, const MPCRef& ref) {
+void LTV_MPC::buildLinearization(const MPCRef& ref) {
     using Eigen::MatrixXd;
     using Eigen::VectorXd;
 
@@ -184,12 +184,6 @@ void LTV_MPC::buildLinearization(const MPCState& x, const MPCRef& ref) {
         x0(4) = 0.0;                               // yaw rate r
         x0(5) = 0.0;                               // delta
         if (ACC_ENABLE) x0(6) = 0.0;            // gap
-
-        // x0(2) = std::max(0.0, x.vx);  // vx nominal
-        // x0(3) = 0.0;                               // vy
-        // x0(4) = 0.0;                               // yaw rate r
-        // x0(5) = 0.0;                               // delta
-        // if (ACC_ENABLE) x0(6) = x.d;            // gap
 
         // one-step view for reference fields at stage k
         MPCRef ref_k;
