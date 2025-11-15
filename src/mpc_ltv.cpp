@@ -254,10 +254,9 @@ void LTV_MPC::setCorridorBounds(const std::vector<double>& lo,
 // Uses triplet assembly (no sparse block assignment).
 // ------------------------------------------------------------------
 MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
-    // const int nx = 4;   // [ey, epsi, v, delta]
     const bool ACC_ENABLE = accp_.enable;
     const int nx = ACC_ENABLE ? 5 : 4;   // [ey, epsi, v, delta, (d)]
-    const int nu = 2;   // [a, ddelta]
+    const int nu = 2;   // [R, ddelta]
     const int N  = P.N;
     const int id_ey = 0, id_epsi = 1, id_v = 2, id_delta = 3;
     const int id_d  = ACC_ENABLE ? 4 : -1;
@@ -336,7 +335,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
                 Ht.emplace_back(ukm1,  uk,   -2.0*w);
             }
         }
-
+        }
         // --- propulsion "jerk": (R_k - 2 R_{k-1} + R_{k-2})^2
         if (P.wddR > 0.0) {
             for (int k = 2; k < N; ++k) {
@@ -364,7 +363,6 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
                 Ht.emplace_back(Rkm2, Rkm1, s * b*c);
                 // no linear term because the reference for R is 0 by default
             }
-        }
     }
 
     // terminal ey/epsi
