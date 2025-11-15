@@ -92,94 +92,150 @@ void discretizeZOH(const Eigen::MatrixXd& A,
 //  delta_dot= ddelta
 // Discretization: Zero-Order Hold (ZOH)
 // ------------------------------------------------------------------
+// dynamics with no slip — cleaner version using generic f(x,u)
+
 void LTV_MPC::buildLinearization(const MPCRef& ref) {
+    using Eigen::MatrixXd;
+    using Eigen::VectorXd;
+
     const int N  = P.N;
     const bool ACC_ENABLE = accp_.enable;
-    const int nx = ACC_ENABLE ? 5 : 4;
-    const int nu = 2;
-    lm_.A.assign(N, Eigen::MatrixXd::Identity(nx, nx));
-    lm_.B.assign(N, Eigen::MatrixXd::Zero(nx, nu));
-    lm_.c.assign(N, Eigen::VectorXd::Zero(nx));
+    const int nx = ACC_ENABLE ? 5 : 4;   // [ey, epsi, v, delta, (d)]
+    const int nu = 2;                    // [R, ddelta]
 
-    // helper to compute f = vdot given state and inputs (Fwind=0)
-    auto vdot = [&](double v, double delta, double ddelta, double R){
+    // allocate horizon containers
+    lm_.A.assign(N, MatrixXd::Identity(nx, nx));
+    lm_.B.assign(N, MatrixXd::Zero(nx, nu));
+    lm_.c.assign(N, VectorXd::Zero(nx));
+
+    // ------------ helper: longitudinal vdot (same as your current code) ------------
+    auto vdot_scalar = [&](double v, double delta, double ddelta, double R) -> double {
         const double c  = std::cos(delta);
-        const double s2 = 1.0/(c*c);           // sec^2
+        const double s2 = 1.0 / (c * c);           // sec^2
         const double t  = std::tan(delta);
-        const double denom = (vp_.m + vp_.m0 * t*t);
+        const double denom    = (vp_.m + vp_.m0 * t * t);
         const double coupling = (vp_.m0 * t * s2) * ddelta * v; // Fwind = 0
-        return (R - coupling) / denom;                        // Eq.(6)
-      };
+        return (R - coupling) / denom;                           // Eq.(6)
+    };
 
-    for (int k = 0; k < N; ++k) {
-        const int idx = std::min<int>(k,(int)ref.hp.size()-1);
-        const double vref = idx>=0 ? ref.hp[idx].v_ref : 0.0;
-        const double kap  = idx>=0 ? ref.hp[idx].kappa : 0.0;
-        const double deltaref = 0.0;              // you linearize around δ≈0 unless you have a ref
-        const double ddref    = 0.0;
-        const double Rref     = 0.0;
+    // ------------ helper: continuous-time f(x,u; ref_k) for no-slip model ------------
+    auto f_dyn = [&](const VectorXd& x,
+                     const VectorXd& u,
+                     const MPCRef& ref_k) -> VectorXd
+    {
+        // unpack state
+        const double ey    = x(0);
+        const double epsi  = x(1);
+        const double v     = x(2);
+        const double delta = x(3);
+        const double d_gap = ACC_ENABLE ? x(4) : 0.0; (void)d_gap; // gap only used for ACC
 
-        Eigen::MatrixXd A = Eigen::MatrixXd::Zero(nx, nx);
-        Eigen::MatrixXd B = Eigen::MatrixXd::Zero(nx,  2);
-        Eigen::VectorXd d = Eigen::VectorXd::Zero(nx);
+        // unpack inputs
+        const double R_cmd  = u(0);   // rear longitudinal force
+        const double ddelta = u(1);   // steering rate
 
-        // ey, epsi same as before
-        A(0,1) = vref;
-        A(1,3) = vref / vp_.L;
-        A(1,2) = -kap;
-        d(1)   = -vref * kap;
+        // reference info for this stage
+        const double kappa_ref = ref_k.hp[0].kappa;
+        const double v_obj_ref =
+            (!ref_k.v_obj.empty() ? ref_k.v_obj[0] : ref_k.hp[0].v_ref);
 
-        // -------- longitudinal row: finite-diff Jacobian wrt [v,delta] and inputs [R, ddelta]
-        const double eps = 1e-6;
-        const double f0  = vdot(vref, deltaref, ddref, Rref);
+        VectorXd dx = VectorXd::Zero(nx);
 
-        // ∂f/∂v
-        double fv = (vdot(vref+eps, deltaref, ddref, Rref)-f0)/eps;
-        // ∂f/∂δ
-        double fdel = (vdot(vref, deltaref+eps, ddref, Rref)-f0)/eps;
-        // ∂f/∂R
-        double fR = (vdot(vref, deltaref, ddref, Rref+eps)-f0)/eps;
-        // ∂f/∂(δdot)
-        double fdd = (vdot(vref, deltaref, ddref+eps, Rref)-f0)/eps;
+        // Frenet kinematics (no-slip approximation)
+        dx(0) = v * epsi;                      // e_y_dot
+        dx(1) = (v / vp_.L) * delta - v * kappa_ref; // e_psi_dot
 
-        A(2,2) = fv;            // v row wrt v
-        A(2,3) = fdel;          // v row wrt delta
-        B(2,0) = fR;            // input 0 is R
-        B(2,1) = fdd;           // input 1 is ddelta
+        // longitudinal dynamics
+        dx(2) = vdot_scalar(v, delta, ddelta, R_cmd);   // v_dot
 
-        // delta_dot = ddelta  (same as before)
-        B(3,1) = 1.0;
+        // steering actuator
+        dx(3) = ddelta;                      // delta_dot
 
+        // ACC gap dynamics
         if (ACC_ENABLE) {
-            const int id_v = 2;   // v index
-            const int id_d = 4;   // distance state index
-        
-            // d_dot = v_obj(k) - v   (treat v_obj piecewise-constant over the sample)
-            A(id_d, id_v) = -1.0;
-            d(id_d)       = (ref.v_obj.size() > (size_t)k)
-                            ? ref.v_obj[k]
-                            : ref.hp[idx].v_ref;
+            dx(4) = v_obj_ref - v;          // d_dot
         }
-        
-        // discretize (ZOH)
-        Eigen::MatrixXd Ad, Bd;
-        Eigen::VectorXd cd;
+
+        (void)ey; // used in dx(0), but this silences some compilers
+        return dx;
+    };
+
+    // ------------ linearize each stage, then ZOH-discretize ------------
+    for (int k = 0; k < N; ++k) {
+        const int idx = std::min<int>(k, static_cast<int>(ref.hp.size()) - 1);
+
+        // nominal expansion point (x0,u0) from reference
+        VectorXd x0 = VectorXd::Zero(nx);
+        VectorXd u0 = VectorXd::Zero(nu);
+
+        // states around nominal straight-lane tracking
+        x0(2) = std::max(0.0, ref.hp[idx].v_ref);  // v nominal
+        x0(3) = 0.0;                               // delta
+        if (ACC_ENABLE) x0(4) = 0.0;              // gap (relative distance offset)
+
+        // inputs nominally zero
+        // u0(0) = 0 (R_cmd); u0(1) = 0 (ddelta) already by Zero()
+
+        // build a "single-step" reference for this stage
+        MPCRef ref_k;
+        ref_k.hp.resize(1);
+        ref_k.hp[0] = ref.hp[idx];
+        if (!ref.v_obj.empty()) {
+            ref_k.v_obj = { ref.v_obj[ std::min<int>(k,
+                                 static_cast<int>(ref.v_obj.size() - 1)) ] };
+        }
+
+        // base vector field and finite-diff Jacobians
+        const VectorXd f0 = f_dyn(x0, u0, ref_k);
+
+        MatrixXd A = MatrixXd::Zero(nx, nx);
+        MatrixXd B = MatrixXd::Zero(nx, nu);
+        VectorXd d = VectorXd::Zero(nx);
+
+        const double eps = 1e-6;
+
+        // df/dx
+        for (int i = 0; i < nx; ++i) {
+            VectorXd x_eps = x0;
+            x_eps(i) += eps;
+            const VectorXd f_eps = f_dyn(x_eps, u0, ref_k);
+            A.col(i) = (f_eps - f0) / eps;
+        }
+
+        // df/du
+        for (int j = 0; j < nu; ++j) {
+            VectorXd u_eps = u0;
+            u_eps(j) += eps;
+            const VectorXd f_eps = f_dyn(x0, u_eps, ref_k);
+            B.col(j) = (f_eps - f0) / eps;
+        }
+
+        // affine term: f ≈ A(x-x0) + B(u-u0) + d
+        d = f0 - A * x0 - B * u0;
+
+        // ZOH discretization
+        MatrixXd Ad, Bd;
+        VectorXd cd;
         discretizeZOH(A, B, d, P.dt, Ad, Bd, cd);
 
-        lm_.A[k] = Ad; lm_.B[k] = Bd; lm_.c[k] = cd;    
+        lm_.A[k] = Ad;
+        lm_.B[k] = Bd;
+        lm_.c[k] = cd;
     }
 
-    // Basic nominal trajectory (zeros except v nominal to last preview)
-    nom_.x.resize(N+1);
+    // ------------ nominal rollout (same idea as before) ------------
+    nom_.x.resize(N + 1);
     nom_.u.resize(N);
-    for (int k=0; k<=N; ++k) {
-        nom_.x[k].ey = 0.0;
-        nom_.x[k].epsi = 0.0;
-        nom_.x[k].v = (k < (int)ref.hp.size()) ? ref.hp[k].v_ref
-                                               : ref.hp.empty() ? 0.0 : ref.hp.back().v_ref;
+    for (int k = 0; k <= N; ++k) {
+        nom_.x[k].ey    = 0.0;
+        nom_.x[k].epsi  = 0.0;
+        nom_.x[k].v     = (k < (int)ref.hp.size())
+                            ? ref.hp[k].v_ref
+                            : (ref.hp.empty() ? 0.0 : ref.hp.back().v_ref);
         nom_.x[k].delta = 0.0;
+        if (ACC_ENABLE) nom_.x[k].d = 0.0;
+        if (k < N) nom_.u[k].setZero();
     }
-    for (int k=0; k<N; ++k) nom_.u[k].setZero();
 }
 
 void LTV_MPC::setCorridorBounds(const std::vector<double>& lo,
