@@ -106,6 +106,17 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
     const int nx = ACC_ENABLE ? 7 : 6;   // [ey, epsi, vx, vy, r, delta, (d)]
     const int nu = 2;                      // [R, ddelta]
 
+    constexpr int id_ey    = 0;
+    constexpr int id_epsi  = 1;
+    constexpr int id_vx    = 2;
+    constexpr int id_vy    = 3;
+    constexpr int id_r     = 4;
+    constexpr int id_delta = 5;
+    const int     id_d     = ACC_ENABLE ? 6 : -1;
+
+    const int id_R      = 0;;
+    const int id_ddelta = 1;
+
     // allocate horizon containers
     lm_.A.assign(N, MatrixXd::Identity(nx, nx));
     lm_.B.assign(N, MatrixXd::Zero(nx, nu));
@@ -117,20 +128,20 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
                      const MPCRef& ref_k) -> VectorXd
     {
         // unpack state
-        const double ey    = x(0);
-        const double epsi  = x(1);
-        double       vx    = x(2);
-        const double vy    = x(3);
-        const double r     = x(4);       // yaw-rate = dpsi
-        const double delta = x(5);
-        const double d_gap = ACC_ENABLE ? x(6) : 0.0; (void)d_gap;
+        const double ey    = x(id_ey);
+        const double epsi  = x(id_epsi);
+        double       vx    = x(id_vx);
+        const double vy    = x(id_vy);
+        const double r     = x(id_r);       // yaw-rate = dpsi
+        const double delta = x(id_delta);
+        const double d_gap = ACC_ENABLE ? x(id_d) : 0.0; (void)d_gap;
 
         // guard near-zero forward speed for slip formulas
         vx = std::max(0.1, vx);
 
         // unpack inputs
-        const double R_cmd  = u(0);   // rear-axle longitudinal force request
-        const double ddelta = u(1);   // steering rate
+        const double R_cmd  = u(id_R);   // rear-axle longitudinal force request
+        const double ddelta = u(id_ddelta);   // steering rate
 
         // tire/body forces + yaw moment using shared physics
         dynamics::tire::VehicleGeom vg{ vp_.m, vp_.L, vp_.d, vp_.JG };
@@ -150,21 +161,20 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         VectorXd dx = VectorXd::Zero(ACC_ENABLE ? 7 : 6);
 
         // Frenet geometry
-        dx(0) = vx * std::sin(epsi) + vy * std::cos(epsi);   // e_y_dot
-        dx(1) = r  - kappa_ref * vx;                         // e_psi_dot
+        dx(id_ey) = vx * std::sin(epsi) + vy * std::cos(epsi);   // e_y_dot
+        dx(id_epsi) = r  - kappa_ref * vx;                         // e_psi_dot
 
         // body-frame RB dynamics
-        dx(2) = ax;                                          // v_x_dot
-        dx(3) = ay;                                          // v_y_dot
-        dx(4) = rdot;                                        // yaw-rate dot
+        dx(id_vx) = ax;                                          // v_x_dot
+        dx(id_vy) = ay;                                          // v_y_dot
+        dx(id_r) = rdot;                                        // yaw-rate dot
 
         // steering actuator kinematics
-        dx(5) = ddelta;                                      // delta dot
+        dx(id_delta) = ddelta;                                      // delta dot
 
         // ACC gap dynamics (simple relative-speed integrator)
         if (ACC_ENABLE) {
-            dx(6) = v_obj_ref - vx;                          // d_dot
-            // std::cout << "v_obj_ref: " << v_obj_ref << ", vx: " << vx << ", dx(6): " << dx(6) << std::endl;
+            dx(id_d) = v_obj_ref - vx;                          // d_dot
         }
 
         (void)ey; // used in kinematics above; silence warnings in some builds
@@ -179,11 +189,11 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         VectorXd x0 = VectorXd::Zero(nx);
         VectorXd u0 = VectorXd::Zero(nu);
 
-        x0(2) = std::max(0.0, ref.hp[idx].v_ref);  // vx nominal
-        x0(3) = 0.0;                               // vy
-        x0(4) = 0.0;                               // yaw rate r
-        x0(5) = 0.0;                               // delta
-        if (ACC_ENABLE) x0(6) = 0.0;            // gap
+        x0(id_vx) = std::max(0.0, ref.hp[idx].v_ref);  // vx nominal
+        x0(id_vy) = 0.0;                               // vy
+        x0(id_r) = 0.0;                               // yaw rate r
+        x0(id_delta) = 0.0;                               // delta
+        if (ACC_ENABLE) x0(id_d) = 0.0;            // gap
 
         // one-step view for reference fields at stage k
         MPCRef ref_k;
@@ -279,6 +289,9 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     constexpr int id_delta = 5;
     const int     id_d     = ACC_ENABLE ? 6 : -1;
 
+    const int id_R      = 0;;
+    const int id_ddelta = 1;
+
     // stacked decision sizes
     const int NX = (N + 1) * nx;
     const int NU = N * nu;
@@ -334,8 +347,8 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
         g(idx_x(k, id_vx)) += -2.0 * P.wv * vref;
 
         // input penalties
-        Ht.emplace_back(idx_u(k, 0), idx_u(k, 0), 2.0 * P.wR);
-        Ht.emplace_back(idx_u(k, 1), idx_u(k, 1), 2.0 * P.wdd);
+        Ht.emplace_back(idx_u(k, id_R), idx_u(k, 0), 2.0 * P.wR);
+        Ht.emplace_back(idx_u(k, id_ddelta), idx_u(k, 1), 2.0 * P.wdd);
 
         // input slew (u_k - u_{k-1})^2
         if (k > 0) {
@@ -449,8 +462,8 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
 
     // (2) input boxes
     for (int k = 0; k < N; ++k) {
-        push_row_le(row, idx_u(k, 0), 1.0, lim_.R_min,        lim_.R_max);        ++row;  // R
-        push_row_le(row, idx_u(k, 1), 1.0, -lim_.ddelta_max,  lim_.ddelta_max);   ++row;  // ddelta
+        push_row_le(row, idx_u(k, id_R), 1.0, lim_.R_min,        lim_.R_max);        ++row;  // R
+        push_row_le(row, idx_u(k, id_ddelta), 1.0, -lim_.ddelta_max,  lim_.ddelta_max);   ++row;  // ddelta
     }
 
     // (3) steering angle bounds
@@ -554,8 +567,8 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
 
     const VectorXd z = solver.getSolution();
     MPCControl out;
-    out.R      = z(idx_u(0, 0));
-    out.ddelta = z(idx_u(0, 1));
+    out.R      = z(idx_u(0, id_R));
+    out.ddelta = z(idx_u(0, id_ddelta));
     out.ok     = true;
     return out;
 }
