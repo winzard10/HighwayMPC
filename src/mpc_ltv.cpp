@@ -102,6 +102,9 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
     const bool ACC_ENABLE = accp_.enable;
     const int nx = ACC_ENABLE ? 5 : 4;   // [ey, epsi, v, delta, (d)]
     const int nu = 2;                    // [R, ddelta]
+    const int id_ey = 0, id_epsi = 1, id_v = 2, id_delta = 3;
+    const int id_d  = ACC_ENABLE ? 4 : -1;
+    const int id_R      = 0, id_ddelta = 1;
 
     // allocate horizon containers
     lm_.A.assign(N, MatrixXd::Identity(nx, nx));
@@ -124,15 +127,15 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
                      const MPCRef& ref_k) -> VectorXd
     {
         // unpack state
-        const double ey    = x(0);
-        const double epsi  = x(1);
-        const double v     = x(2);
-        const double delta = x(3);
-        const double d_gap = ACC_ENABLE ? x(4) : 0.0; (void)d_gap; // gap only used for ACC
+        const double ey    = x(id_ey);
+        const double epsi  = x(id_epsi);
+        const double v     = x(id_v);
+        const double delta = x(id_delta);
+        const double d_gap = ACC_ENABLE ? x(id_d) : 0.0; (void)d_gap; // gap only used for ACC
 
         // unpack inputs
-        const double R_cmd  = u(0);   // rear longitudinal force
-        const double ddelta = u(1);   // steering rate
+        const double R_cmd  = u(id_R);   // rear longitudinal force
+        const double ddelta = u(id_ddelta);   // steering rate
 
         // reference info for this stage
         const double kappa_ref = ref_k.hp[0].kappa;
@@ -142,18 +145,18 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         VectorXd dx = VectorXd::Zero(nx);
 
         // Frenet kinematics (no-slip approximation)
-        dx(0) = v * epsi;                      // e_y_dot
-        dx(1) = (v / vp_.L) * delta - v * kappa_ref; // e_psi_dot
+        dx(id_ey) = v * epsi;                      // e_y_dot
+        dx(id_epsi) = (v / vp_.L) * delta - v * kappa_ref; // e_psi_dot
 
         // longitudinal dynamics
-        dx(2) = vdot_scalar(v, delta, ddelta, R_cmd);   // v_dot
+        dx(id_v) = vdot_scalar(v, delta, ddelta, R_cmd);   // v_dot
 
         // steering actuator
-        dx(3) = ddelta;                      // delta_dot
+        dx(id_delta) = ddelta;                      // delta_dot
 
         // ACC gap dynamics
         if (ACC_ENABLE) {
-            dx(4) = v_obj_ref - v;          // d_dot
+            dx(id_d) = v_obj_ref - v;          // d_dot
         }
 
         (void)ey; // used in dx(0), but this silences some compilers
@@ -169,9 +172,9 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         VectorXd u0 = VectorXd::Zero(nu);
 
         // states around nominal straight-lane tracking
-        x0(2) = std::max(0.0, ref.hp[idx].v_ref);  // v nominal
-        x0(3) = 0.0;                               // delta
-        if (ACC_ENABLE) x0(4) = 0.0;              // gap (relative distance offset)
+        x0(id_v) = std::max(0.0, ref.hp[idx].v_ref);  // v nominal
+        x0(id_delta) = 0.0;                               // delta
+        if (ACC_ENABLE) x0(id_d) = 0.0;              // gap (relative distance offset)
 
         // inputs nominally zero
         // u0(0) = 0 (R_cmd); u0(1) = 0 (ddelta) already by Zero()
@@ -260,6 +263,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     const int N  = P.N;
     const int id_ey = 0, id_epsi = 1, id_v = 2, id_delta = 3;
     const int id_d  = ACC_ENABLE ? 4 : -1;
+    const int id_R      = 0, id_ddelta = 1;
 
     const int NX = (N+1)*nx;
     const int NU = N*nu;
@@ -309,19 +313,19 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
         const double eyref = (k < (int)ref.ey_ref.size()) ? ref.ey_ref[k] : 0.0;
 
         // (ey_k - eyref)^2
-        Ht.emplace_back(idx_x(k,0), idx_x(k,0), 2.0 * P.wy);
-        g(idx_x(k,0)) += -2.0 * P.wy * eyref;
+        Ht.emplace_back(idx_x(k,id_ey), idx_x(k,id_ey), 2.0 * P.wy);
+        g(idx_x(k,id_ey)) += -2.0 * P.wy * eyref;
 
         // epsi_k^2
-        Ht.emplace_back(idx_x(k,1), idx_x(k,1), 2.0 * P.wpsi);
+        Ht.emplace_back(idx_x(k,id_epsi), idx_x(k,id_epsi), 2.0 * P.wpsi);
 
         // (v_k - vref)^2
-        Ht.emplace_back(idx_x(k,2), idx_x(k,2), 2.0 * P.wv);
-        g(idx_x(k,2)) += -2.0 * P.wv * vref;
+        Ht.emplace_back(idx_x(k,id_v), idx_x(k,id_v), 2.0 * P.wv);
+        g(idx_x(k,id_v)) += -2.0 * P.wv * vref;
 
         // input effort
-        Ht.emplace_back(idx_u(k,0), idx_u(k,0), 2.0 * P.wR);
-        Ht.emplace_back(idx_u(k,1), idx_u(k,1), 2.0 * P.wdd);
+        Ht.emplace_back(idx_u(k,id_R), idx_u(k,id_R), 2.0 * P.wR);
+        Ht.emplace_back(idx_u(k,id_ddelta), idx_u(k,id_ddelta), 2.0 * P.wdd);
 
         // input slew (u_k - u_{k-1})^2
         if (k>0){
@@ -335,41 +339,41 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
                 Ht.emplace_back(ukm1,  uk,   -2.0*w);
             }
         }
+    }
+    // --- propulsion "jerk": (R_k - 2 R_{k-1} + R_{k-2})^2
+    if (P.wddR > 0.0) {
+        for (int k = 2; k < N; ++k) {
+            const int Rk   = idx_u(k,   id_R);  // R_k
+            const int Rkm1 = idx_u(k-1, id_R);  // R_{k-1}
+            const int Rkm2 = idx_u(k-2, id_R);  // R_{k-2}
+
+            // coefficients of the second difference: [1, -2, 1]
+            const double a =  1.0, b = -2.0, c = 1.0;
+            const double s = 2.0 * P.wddR;     // factor for Hessian (2 * w)
+
+            // diagonals
+            Ht.emplace_back(Rk,   Rk,   s * a*a);     // +2w * 1
+            Ht.emplace_back(Rkm1, Rkm1, s * b*b);     // +2w * 4
+            Ht.emplace_back(Rkm2, Rkm2, s * c*c);     // +2w * 1
+
+            // off-diagonals (symmetric)
+            Ht.emplace_back(Rk,   Rkm1, s * a*b);     // -4w
+            Ht.emplace_back(Rkm1, Rk,   s * a*b);
+
+            Ht.emplace_back(Rk,   Rkm2, s * a*c);     // +2w
+            Ht.emplace_back(Rkm2, Rk,   s * a*c);
+
+            Ht.emplace_back(Rkm1, Rkm2, s * b*c);     // -4w
+            Ht.emplace_back(Rkm2, Rkm1, s * b*c);
+            // no linear term because the reference for R is 0 by default
         }
-        // --- propulsion "jerk": (R_k - 2 R_{k-1} + R_{k-2})^2
-        if (P.wddR > 0.0) {
-            for (int k = 2; k < N; ++k) {
-                const int Rk   = idx_u(k,   0);  // R_k
-                const int Rkm1 = idx_u(k-1, 0);  // R_{k-1}
-                const int Rkm2 = idx_u(k-2, 0);  // R_{k-2}
-
-                // coefficients of the second difference: [1, -2, 1]
-                const double a =  1.0, b = -2.0, c = 1.0;
-                const double s = 2.0 * P.wddR;     // factor for Hessian (2 * w)
-
-                // diagonals
-                Ht.emplace_back(Rk,   Rk,   s * a*a);     // +2w * 1
-                Ht.emplace_back(Rkm1, Rkm1, s * b*b);     // +2w * 4
-                Ht.emplace_back(Rkm2, Rkm2, s * c*c);     // +2w * 1
-
-                // off-diagonals (symmetric)
-                Ht.emplace_back(Rk,   Rkm1, s * a*b);     // -4w
-                Ht.emplace_back(Rkm1, Rk,   s * a*b);
-
-                Ht.emplace_back(Rk,   Rkm2, s * a*c);     // +2w
-                Ht.emplace_back(Rkm2, Rk,   s * a*c);
-
-                Ht.emplace_back(Rkm1, Rkm2, s * b*c);     // -4w
-                Ht.emplace_back(Rkm2, Rkm1, s * b*c);
-                // no linear term because the reference for R is 0 by default
-            }
     }
 
     // terminal ey/epsi
-    Ht.emplace_back(idx_x(N,0), idx_x(N,0), 2.0 * P.wyf);
-    g(idx_x(N,0)) += -2.0 * P.wyf * ref.ey_ref_N;
+    Ht.emplace_back(idx_x(N,id_ey), idx_x(N,id_ey), 2.0 * P.wyf);
+    g(idx_x(N,id_ey)) += -2.0 * P.wyf * ref.ey_ref_N;
 
-    Ht.emplace_back(idx_x(N,1), idx_x(N,1), 2.0 * P.wpsif);
+    Ht.emplace_back(idx_x(N,id_epsi), idx_x(N,id_epsi), 2.0 * P.wpsif);
 
     // finally build H
     SparseMatrix<double> H(NZ, NZ);
@@ -411,13 +415,13 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
         }
     }
     // initial condition x_0 = x0
-    beq(row_x0(0)) = x0.ey;   Aeqt.emplace_back(row_x0(0), idx_x(0,0), 1.0);
-    beq(row_x0(1)) = x0.epsi; Aeqt.emplace_back(row_x0(1), idx_x(0,1), 1.0);
-    beq(row_x0(2)) = x0.v;    Aeqt.emplace_back(row_x0(2), idx_x(0,2), 1.0);
-    beq(row_x0(3)) = x0.delta;Aeqt.emplace_back(row_x0(3), idx_x(0,3), 1.0);
+    beq(row_x0(id_ey))      = x0.ey;   Aeqt.emplace_back(row_x0(id_ey),     idx_x(0,id_ey),     1.0);
+    beq(row_x0(id_epsi))    = x0.epsi; Aeqt.emplace_back(row_x0(id_epsi),   idx_x(0,id_epsi),   1.0);
+    beq(row_x0(id_v))       = x0.v;    Aeqt.emplace_back(row_x0(id_v),      idx_x(0,id_v),      1.0);
+    beq(row_x0(id_delta))   = x0.delta;Aeqt.emplace_back(row_x0(id_delta),  idx_x(0,id_delta),  1.0);
 
     if (ACC_ENABLE) {
-        beq(row_x0(4)) = x0.d; Aeqt.emplace_back(row_x0(4), idx_x(0,id_d), 1.0);
+        beq(row_x0(id_d))   = x0.d;    Aeqt.emplace_back(row_x0(id_d),      idx_x(0,id_d),      1.0);
     }
 
     // Inequalities: input bounds, delta bounds, v bounds, ey corridor
@@ -433,27 +437,27 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     // ey corridor for k = 0..N-1  :  ey_lower[k] <= ey_k <= ey_upper[k]
     for (int k=0; k<N; ++k){
         if (ey_upper[k] < +OSQP_INFTY) { // ey_k <= up
-            push_row_le(row, idx_x(k,0), +1.0, -OSQP_INFTY, ey_upper[k]); ++row;
+            push_row_le(row, idx_x(k,id_ey), +1.0, -OSQP_INFTY, ey_upper[k]); ++row;
         }
         if (ey_lower[k] > -OSQP_INFTY) { // ey_k >= lo  ->  -ey_k <= -lo
-            push_row_le(row, idx_x(k,0), -1.0, -OSQP_INFTY, -ey_lower[k]); ++row;
+            push_row_le(row, idx_x(k,id_ey), -1.0, -OSQP_INFTY, -ey_lower[k]); ++row;
         }
-    }
-
-    // input box
-    for (int k=0; k<N; ++k){
-        push_row_le(row, idx_u(k,0), 1.0, lim_.R_min, lim_.R_max);               ++row; // R
-        push_row_le(row, idx_u(k,1), 1.0, -lim_.ddelta_max, lim_.ddelta_max);    ++row; // δ̇
-    }
-    
-    // steering angle bounds
-    for (int k=0; k<=N; ++k){
-        push_row_le(row, idx_x(k,3), 1.0, -lim_.delta_max, lim_.delta_max);      ++row; // δ
     }
 
     // v bounds (optional)
     for (int k=0; k<=N; ++k){
-        push_row_le(row, idx_x(k,2), 1.0, P.v_min, P.v_max); ++row;
+        push_row_le(row, idx_x(k,id_v), 1.0, P.v_min, P.v_max);                          ++row;
+    }
+
+    // steering angle bounds
+    for (int k=0; k<=N; ++k){
+        push_row_le(row, idx_x(k,id_delta), 1.0, -lim_.delta_max, lim_.delta_max);       ++row; // δ
+    }
+
+    // input box
+    for (int k=0; k<N; ++k){
+        push_row_le(row, idx_u(k,id_R), 1.0, lim_.R_min, lim_.R_max);                    ++row; // R
+        push_row_le(row, idx_u(k,id_ddelta), 1.0, -lim_.ddelta_max, lim_.ddelta_max);    ++row; // δ̇
     }
 
     // --- tire force linearized inequalities
@@ -507,8 +511,8 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
             // +Jv*v_k + Jdel*delta_k + Jdd*ddelta_k + JR*R_k <= Fmax - F0
             Aint.emplace_back(row, idx_x(k, id_v),     jv);
             Aint.emplace_back(row, idx_x(k, id_delta), jdel);
-            Aint.emplace_back(row, idx_u(k, 1),        jdd);
-            Aint.emplace_back(row, idx_u(k, 0),        jR);
+            Aint.emplace_back(row, idx_u(k, id_ddelta),        jdd);
+            Aint.emplace_back(row, idx_u(k, id_R),        jR);
             lin_v.push_back(-OSQP_INFTY);
             uin_v.push_back(Fmax - F0);
             ++row;
@@ -516,8 +520,8 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
             // and symmetric: -F(x,u) <= Fmax  → negate coeffs, RHS = Fmax + F0
             Aint.emplace_back(row, idx_x(k, id_v),     -jv);
             Aint.emplace_back(row, idx_x(k, id_delta), -jdel);
-            Aint.emplace_back(row, idx_u(k, 1),        -jdd);
-            Aint.emplace_back(row, idx_u(k, 0),        -jR);
+            Aint.emplace_back(row, idx_u(k, id_ddelta),        -jdd);
+            Aint.emplace_back(row, idx_u(k, id_R),        -jR);
             lin_v.push_back(-OSQP_INFTY);
             uin_v.push_back(Fmax + F0);
             ++row;
@@ -543,7 +547,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
             uin_v.push_back(+OSQP_INFTY);
             ++row;
         }
-        }
+    }
 
     // Build A, l, u from triplets (no sparse blocks)
     const int meq = (int)beq.size();
@@ -561,7 +565,6 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     l.head(meq) = beq;
     u.head(meq) = beq;
     for (int i=0; i<mineq; ++i) { l(meq+i) = lin_v[i]; u(meq+i) = uin_v[i]; }
-
 
     // -----------------------------
     // Solve with OSQP
@@ -584,8 +587,8 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
 
     Eigen::VectorXd z = solver.getSolution();
     MPCControl out;
-    out.R      = z(idx_u(0,0));
-    out.ddelta = z(idx_u(0,1));
+    out.R      = z(idx_u(0,id_R));
+    out.ddelta = z(idx_u(0,id_ddelta));
     out.ok     = true;
     return out;
 }
