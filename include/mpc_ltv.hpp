@@ -16,7 +16,7 @@ namespace acc { struct Params; }
 // MPC configuration
 // ---------------------------------
 struct MPCParams {
-    int    N   = 200;
+    int    N   = 100;
     double dt;
 
     // weights
