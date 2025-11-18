@@ -11,6 +11,11 @@ struct TireParams {
   double mur{1.00};  // rear axle friction
   double Bf{7.8727}, Cf{2.5296}, Ef{1.3059};  // front MF
   double Br{7.8727}, Cr{2.5296}, Er{1.3059};  // rear  MF
+
+  double m_unsprung_front{120.0}; // per axle
+  double m_unsprung_rear{80.0};  // per axle
+
+  double Kzx{130.0}; // Longitudinal load transfer coefficient
 };
 
 // Active / global tire set
@@ -39,7 +44,7 @@ struct ForceResult {
 };
 
 // API
-ForceResult computeForcesBody(double vx, double vy, double r,
+ForceResult computeForcesBody(double vx, double vy, double dpsi,
                               double delta, double R_rear,
                               const VehicleGeom& vg,
                               const TireParams& tp,
@@ -47,7 +52,7 @@ ForceResult computeForcesBody(double vx, double vy, double r,
 
 // (exposed helpers if you need them elsewhere)
 double pacejkaFy(double B,double C,double D,double E,double alpha);
-double slipAngleFront(double vx,double vy,double r,double delta,double Lf);
-double slipAngleRear (double vx,double vy,double r,double Lr);
+double slipAngleFront(double vx,double vy,double dpsi,double delta,double Lf);
+double slipAngleRear (double vx,double vy,double dpsi,double Lr);
 
 } // namespace dynamics::tire

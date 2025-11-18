@@ -481,8 +481,8 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     // (5) simple lateral capacity guard using static axle loads + mu
     {
         const double g = 9.81;
-        const double Fzf0 = vp_.m * g * (vp_.L - vp_.d) / vp_.L;  // front axle
-        const double Fzr0 = vp_.m * g * (vp_.d)        / vp_.L;    // rear axle
+        const double Fzf0 = vp_.m * g * (vp_.L - vp_.d) / vp_.L + tp_.m_unsprung_front * g;  // front axle
+        const double Fzr0 = vp_.m * g * (vp_.d)        / vp_.L + tp_.m_unsprung_rear * g;    // rear axle
         const double Fy_front_peak = 2.0 * (tp_.muf * Fzf0);
         const double Fy_rear_peak  = 2.0 * (tp_.mur * Fzr0);
         const double Fy_cap = Fy_front_peak + Fy_rear_peak;

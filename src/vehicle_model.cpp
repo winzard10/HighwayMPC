@@ -1,6 +1,7 @@
 #include "vehicle_model.hpp"
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 
 namespace dynamics::vehicle {
 
@@ -26,8 +27,13 @@ State step(const State& s, const Control& u,
   const auto fr = dynamics::tire::computeForcesBody(
       s.vx, s.vy, s.dpsi, n.delta, R_cmd, vg, tp, 9.81);
 
-  const double ax   = fr.Fx_sum / vp.m + s.dpsi * s.vy;
-  const double ay   = fr.Fy_sum / vp.m - s.dpsi * s.vx;
+  printf("R_rear: %.2f N, out.Fx_sum: %.2f N, out.Fy_sum: %.2f N\n",
+      R_cmd, fr.Fx_sum, fr.Fy_sum);
+
+  double m_tot = vp.m + tp.m_unsprung_front + tp.m_unsprung_rear;
+
+  const double ax   = fr.Fx_sum / m_tot + s.dpsi * s.vy;
+  const double ay   = fr.Fy_sum / m_tot - s.dpsi * s.vx;
   const double rdot = fr.Mz     / vp.JG;
 
   n.vx   = std::max(0.0, s.vx + ax*dt);
