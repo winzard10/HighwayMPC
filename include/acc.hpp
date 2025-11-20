@@ -10,10 +10,10 @@ namespace acc {
 
 // ---------- Parameters ----------
 struct Params {
-    bool   enable{true};
+    bool   enable{false};
     double tau{1.4};
     double dmin{5.0};
-    double d_init{150.0}; 
+    double d_init{50.0}; 
 };
 
 // ---------- Lead profile ----------

@@ -83,6 +83,22 @@ void discretizeZOH(const Eigen::MatrixXd& A,
     }
 }
 
+double LTV_MPC::ax_min(double vx, const ACCBoundCoeffs& coeffs) { return acclimit(coeffs.a_min_coeffs, vx); }
+
+double LTV_MPC::ax_max(double vx, const ACCBoundCoeffs& coeffs) { return acclimit(coeffs.a_max_coeffs, vx); }
+
+double LTV_MPC::acclimit(const std::vector<double>& coeffs, double vx)
+{
+    double a = 0.0;
+    double U_pow = 1.0;   // U^0 initially
+
+    for (double c : coeffs) {
+        a += c * U_pow;
+        U_pow *= vx;       // next power
+    }
+    return a;
+}
+
 // ------------------------------------------------------------------
 // buildLinearization: Dynamic bicycle model with lateral tire slip
 // States: [ey, epsi, vx, vy, r, delta, (d)]
@@ -149,8 +165,9 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
             vx, vy, r, delta, R_cmd, vg, tp_, /*g=*/9.81);
 
         // rigid-body accelerations (body frame)
-        const double ax   = fr.Fx_sum / vp_.m + vy * r;
-        const double ay   = fr.Fy_sum / vp_.m - vx * r;
+        const double m_tot = vp_.m + tp_.m_unsprung_front + tp_.m_unsprung_rear;
+        const double ax    = fr.Fx_sum / m_tot + vy * r;
+        const double ay    = fr.Fy_sum / m_tot - vx * r;
         const double rdot = fr.Mz     / vp_.JG;
 
         // reference curvature/speed for Frenet kinematics (stage-local)
@@ -295,10 +312,14 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     // stacked decision sizes
     const int NX = (N + 1) * nx;
     const int NU = N * nu;
-    const int NZ = NX + NU;
+    const int Ns = ACC_ENABLE ? N : 0;
+    const int NZ = NX + NU + Ns;
+
+    ACCBoundCoeffs acc_coeffs;
 
     auto idx_x = [&](int k, int i) { return k * nx + i; };        // 0..NX-1
     auto idx_u = [&](int k, int j) { return NX + k * nu + j; };   // NX..NX+NU-1
+    auto idx_s = [&](int k)        { return NX + NU + k; };  
 
     // -----------------------------
     // Corridor bounds for ey
@@ -326,7 +347,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     // COST: H (symmetric) and g
     // ============================
     std::vector<Triplet<double>> Ht;
-    Ht.reserve((NX + NU) * 6);
+    Ht.reserve(NZ * 6);
     VectorXd g = VectorXd::Zero(NZ);
 
     // stage costs
@@ -361,6 +382,11 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
                 Ht.emplace_back(uk,    ukm1, -2.0 * w);
                 Ht.emplace_back(ukm1,  uk,   -2.0 * w);
             }
+        }
+
+        if (ACC_ENABLE) {
+            const int isk = idx_s(k);
+            Ht.emplace_back(isk, isk, 2.0 * P.w_acc_slack);
         }
     }
 
@@ -512,18 +538,60 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
             push_row_le(row, idx_x(k, id_d), 1.0, 0.0, +OSQP_INFTY);
             ++row;
         }
+        // soft headway: d_k - tau*v_k + s_k >= dmin,  s_k >= 0
         for (int k = 0; k < N; ++k) {
             const bool has = (k < (int)ref.has_obj.size()) ? (ref.has_obj[k] != 0) : false;
             if (!has) continue;
-    
-            Aint.emplace_back(row, idx_x(k, id_d),  +1.0);
-            Aint.emplace_back(row, idx_x(k, id_vx), -accp_.tau);   // <-- see note 2
-            lin_v.push_back(accp_.dmin);                           // <-- see note 2
-            // std::cout << "accp_.dmin: " << accp_.dmin << std::endl;
+
+            const int col_d   = idx_x(k, id_d);
+            const int col_vx  = idx_x(k, id_vx);
+            const int col_sk  = idx_s(k);
+
+            // d_k - tau * v_k + s_k >= dmin
+            Aint.emplace_back(row, col_d,  +1.0);
+            Aint.emplace_back(row, col_vx, -accp_.tau);
+            Aint.emplace_back(row, col_sk, +1.0);
+            lin_v.push_back(accp_.dmin);
+            uin_v.push_back(+OSQP_INFTY);
+            ++row;
+
+            // s_k >= 0  →  1 * s_k >= 0
+            Aint.emplace_back(row, col_sk, 1.0);
+            lin_v.push_back(0.0);
             uin_v.push_back(+OSQP_INFTY);
             ++row;
         }
     }
+
+    // // (7) acceleration bounds a_min(v) <= (vx_{k+1} - vx_k)/dt <= a_max(v)
+    // for (int k = 0; k < N; ++k) {
+    //     const int row_up = row;
+    //     const int row_lo = row + 1;
+
+    //     // decide what speed to use for limits (vref or some nominal):
+    //     const int idx_ref = std::min<int>(k, (int)ref.hp.size() - 1);
+    //     const double vref = (idx_ref >= 0) ? ref.hp[idx_ref].v_ref : 0.0;
+
+    //     const double amax = ax_max(vref, acc_coeffs);
+    //     const double amin = ax_min(vref, acc_coeffs);
+
+    //     const int col_vx_k   = idx_x(k,   id_vx);
+    //     const int col_vx_k1  = idx_x(k+1, id_vx);
+
+    //     // (vx_{k+1} - vx_k)/dt <= amax
+    //     Aint.emplace_back(row_up, col_vx_k1,  1.0 / P.dt);
+    //     Aint.emplace_back(row_up, col_vx_k,  -1.0 / P.dt);
+    //     lin_v.push_back(-OSQP_INFTY);
+    //     uin_v.push_back(amax);
+    //     ++row;
+
+    //     // -(vx_{k+1} - vx_k)/dt <= -amin  →  (vx_k - vx_{k+1})/dt <= -amin
+    //     Aint.emplace_back(row_lo, col_vx_k,   1.0 / P.dt);
+    //     Aint.emplace_back(row_lo, col_vx_k1, -1.0 / P.dt);
+    //     lin_v.push_back(-OSQP_INFTY);
+    //     uin_v.push_back(amin);
+    //     ++row;
+    // }
 
     // Stack equalities + inequalities
     const int meq   = (int)beq.size();

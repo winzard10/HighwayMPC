@@ -38,6 +38,7 @@ t      = _need("t")
 x      = _need("x")
 y      = _need("y")
 v      = _need("vx")
+a      = _need("ax")
 delta  = _need("delta")
 R_cmd  = _need("R_cmd")
 ddcmd  = _need("ddelta_cmd")
@@ -232,6 +233,13 @@ axs[6].set_title("Tire force")
 axs[6].set_xlabel("Time [s]"); axs[6].set_ylabel("Tire force [N]")
 axs[6].legend()
 axs[6].grid(True)
+
+# 9) Acceleration
+axs[7].plot(t, a, label="Longitudinal acceleration")
+axs[7].set_title("Acceleration")
+axs[7].set_xlabel("Time [s]"); axs[7].set_ylabel("Acceleration [m/s^2]")
+axs[7].legend()
+axs[7].grid(True)
 
 
 plt.tight_layout()
