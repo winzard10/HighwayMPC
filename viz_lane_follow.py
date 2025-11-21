@@ -38,7 +38,10 @@ t      = _need("t")
 x      = _need("x")
 y      = _need("y")
 v      = _need("vx")
-a      = _need("ax")
+ax     = _need("ax")
+ay     = _need("ay")
+ddpsi  = _need("ddpsi")
+jerk   = _need("jerk")
 delta  = _need("delta")
 R_cmd  = _need("R_cmd")
 ddcmd  = _need("ddelta_cmd")
@@ -226,21 +229,27 @@ if 'dmin' in locals() and dmin is not None:
         axs[5].plot(t, d_gap, label="lead vehicle")
         axs[5].legend()
 
-# 8) Steering angle
-axs[6].plot(t, F_fl, label="Lateral forces at front")
-axs[6].plot(t, F_rl, label="Lateral forces at rear")
+# 8) Force at tires
+axs[6].plot(t, F_fl, label="Lateral force at front")
+axs[6].plot(t, F_rl, label="Lateral force at rear")
 axs[6].set_title("Tire force")
 axs[6].set_xlabel("Time [s]"); axs[6].set_ylabel("Tire force [N]")
 axs[6].legend()
 axs[6].grid(True)
 
 # 9) Acceleration
-axs[7].plot(t, a, label="Longitudinal acceleration")
+axs[7].plot(t, ax, label="Longitudinal acceleration [m/s^2]")
+axs[7].plot(t, ay, label="Lateral acceleration [m/s^2]")
+axs[7].plot(t, ddpsi, "--", label="Yaw acceleration [rad/s^2]")
 axs[7].set_title("Acceleration")
-axs[7].set_xlabel("Time [s]"); axs[7].set_ylabel("Acceleration [m/s^2]")
-axs[7].legend()
-axs[7].grid(True)
+axs[7].set_xlabel("Time [s]"); axs[7].set_ylabel("Acceleration")
+axs[7].legend(); axs[7].grid(True)
 
+# 10) Jerk
+axs[8].plot(t[1:], jerk[1:], label="Jerk [m/s^3]")
+axs[8].set_title("Jerk")
+axs[8].set_xlabel("Time [s]"); axs[8].set_ylabel("Jerk [m/s³]")
+axs[8].legend(); axs[8].grid(True)
 
 plt.tight_layout()
 plt.show()

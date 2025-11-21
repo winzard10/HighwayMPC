@@ -22,7 +22,7 @@ struct MPCParams {
     // weights
     double wy    = 2.5;
     double wpsi  = 0.10;
-    double wv    = 1.0;
+    double wv    = 0.25;
     double wR    = 1e-4;
     double wdR   = 1e-5;
     double wddR  = 2e-5;
@@ -49,25 +49,25 @@ struct PreviewPoint {
     double v_ref = 0.0;  // target speed
 };
 
-// struct ACCBoundCoeffs {
-//     std::vector<double> a_min_coeffs{
-//         2.0,          // c0
-//         0.05797,      // c1
-//         -0.006486,     // c2
-//         0.0001155     // c3
-//         };  // size N
-//     std::vector<double> a_max_coeffs{
-//         -3.0,         // c0
-//         -0.01004,     // c1
-//         0.000591,    // c2
-//         0.00000522   // c3
-//         };  // size N
-// };
-
 struct ACCBoundCoeffs {
-    std::vector<double> a_min_coeffs{-3.5589e6, -0.1204, 6.85e-3, -1.38e-4};
-    std::vector<double> a_max_coeffs{3.0828e6, -0.2257, 8.59e-3, -1.28e-4};
+    std::vector<double> a_max_coeffs{
+        2.0,          // c0
+        -0.0425,      // c1
+        0.000125,     // c2
+        0.0     // c3
+        };  // size N
+    std::vector<double> a_min_coeffs{
+        -2.5,         // c0
+        0.0,     // c1
+        0.0,    // c2
+        0.0   // c3
+        };  // size N
 };
+
+// struct ACCBoundCoeffs {
+//     std::vector<double> a_min_coeffs{-3.5589, -0.1204, 6.85e-3, -1.38e-4};
+//     std::vector<double> a_max_coeffs{3.0828, -0.2257, 8.59e-3, -1.28e-4};
+// };
 
 
 // Horizon preview (sim fills hp[i].{kappa,v_ref})

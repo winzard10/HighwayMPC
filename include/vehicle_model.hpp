@@ -29,6 +29,10 @@ struct State {
   double x{0.0}, y{0.0}, psi{0.0};
   double vx{0.0}, vy{0.0}, dpsi{0.0};
   double delta{0.0};
+
+  double ax{0.0}, ay{0.0}, ddpsi{0.0};
+  double ax_prev{0.0};  // for logging jerk
+  double jerk{0.0};
 };
 
 struct Control {

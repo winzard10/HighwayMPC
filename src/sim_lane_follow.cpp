@@ -202,7 +202,7 @@ int main(int argc, char** argv) {
     st.delta = 0.0;
   }
 
-  double previous_v = st.vx;
+  double ax_prev = 0.0;  // for logging jerk
 
   // --- Logging ---
   std::ofstream log(cli.log_file);
@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   log << std::fixed << std::setprecision(6);
-  log << "t,s,x,y,psi,vx,vy,dpsi,delta,ax,R_cmd,ddelta_cmd,ey,epsi,dv,"
+  log << "t,s,x,y,psi,vx,vy,dpsi,delta,ax,ay,ddpsi,jerk,R_cmd,ddelta_cmd,ey,epsi,dv,"
          "v_ref,x_ref,y_ref,psi_ref,alpha,dmin,v_lead,d_gap,Fy_f,Fy_r\n";
 
   // --- Simulation loop ---
@@ -383,14 +383,15 @@ int main(int argc, char** argv) {
         st.vx, st.vy, st.dpsi, st.delta, u_cmd.R, vg, dynamics::tire::current());
 
     log << t << "," << projC.s_proj << "," << st.x << "," << st.y << ","
-        << st.psi << "," << st.vx << "," << st.vy << "," << st.dpsi << "," << st.delta << "," << (st.vx-previous_v)/mpcp.dt << ","
+        << st.psi << "," << st.vx << "," << st.vy << "," << st.dpsi << "," << st.delta << "," 
+        << st.ax << "," << st.ay << "," << st.ddpsi << "," << (st.ax-ax_prev)/mpcp.dt << ","
         << u_cmd.R << "," << u_cmd.ddelta << ","
         << ey << "," << epsi << "," << (st.vx - cref.v_ref) << ","
         << cref.v_ref << "," << x_ref << "," << y_ref << "," << psi_ref << ","
         << alpha << "," << dmin << "," << v_lead_now << "," << d_gap << ","
         << fr_now.Fy_f_body << "," << fr_now.Fy_r_body << "\n";
     
-    previous_v = st.vx;
+    ax_prev = st.ax;
   }
 
   std::cout << "Log written to: " << cli.log_file << "\n";

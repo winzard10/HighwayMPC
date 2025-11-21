@@ -516,7 +516,8 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
         for (int k = 0; k < N; ++k) {
             const int idx = std::min<int>(k, (int)ref.hp.size() - 1);
             const double vref = (idx >= 0) ? ref.hp[idx].v_ref : 0.0;
-            const double coeff = vp_.m * (vref * vref) / std::max(1e-6, vp_.L);
+            double m_tot = vp_.m + tp_.m_unsprung_front + tp_.m_unsprung_rear;
+            const double coeff = m_tot * (vref * vref) / std::max(1e-6, vp_.L);
 
             // +coeff * delta_k <= Fy_cap
             Aint.emplace_back(row, idx_x(k, id_delta), +coeff);
@@ -563,35 +564,94 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
         }
     }
 
-    // // (7) acceleration bounds a_min(v) <= (vx_{k+1} - vx_k)/dt <= a_max(v)
-    // for (int k = 0; k < N; ++k) {
-    //     const int row_up = row;
-    //     const int row_lo = row + 1;
+    // (7) acceleration bounds a_min(v) <= (vx_{k+1} - vx_k)/dt <= a_max(v)
+    for (int k = 0; k < N; ++k) {
+        const int row_up = row;
+        const int row_lo = row + 1;
 
-    //     // decide what speed to use for limits (vref or some nominal):
-    //     const int idx_ref = std::min<int>(k, (int)ref.hp.size() - 1);
-    //     const double vref = (idx_ref >= 0) ? ref.hp[idx_ref].v_ref : 0.0;
+        // decide what speed to use for limits (vref or some nominal):
+        const int idx_ref = std::min<int>(k, (int)ref.hp.size() - 1);
+        const double vref = (idx_ref >= 0) ? ref.hp[idx_ref].v_ref : 0.0;
 
-    //     const double amax = ax_max(vref, acc_coeffs);
-    //     const double amin = ax_min(vref, acc_coeffs);
+        const double amax = ax_max(vref, acc_coeffs);
+        const double amin = ax_min(vref, acc_coeffs);
 
-    //     const int col_vx_k   = idx_x(k,   id_vx);
-    //     const int col_vx_k1  = idx_x(k+1, id_vx);
+        const int col_vx_k   = idx_x(k,   id_vx);
+        const int col_vx_k1  = idx_x(k+1, id_vx);
 
-    //     // (vx_{k+1} - vx_k)/dt <= amax
-    //     Aint.emplace_back(row_up, col_vx_k1,  1.0 / P.dt);
-    //     Aint.emplace_back(row_up, col_vx_k,  -1.0 / P.dt);
-    //     lin_v.push_back(-OSQP_INFTY);
-    //     uin_v.push_back(amax);
-    //     ++row;
+        // (vx_{k+1} - vx_k)/dt <= amax
+        Aint.emplace_back(row_up, col_vx_k1,  1.0 / P.dt);
+        Aint.emplace_back(row_up, col_vx_k,  -1.0 / P.dt);
+        lin_v.push_back(-OSQP_INFTY);
+        uin_v.push_back(amax);
+        ++row;
 
-    //     // -(vx_{k+1} - vx_k)/dt <= -amin  →  (vx_k - vx_{k+1})/dt <= -amin
-    //     Aint.emplace_back(row_lo, col_vx_k,   1.0 / P.dt);
-    //     Aint.emplace_back(row_lo, col_vx_k1, -1.0 / P.dt);
-    //     lin_v.push_back(-OSQP_INFTY);
-    //     uin_v.push_back(amin);
-    //     ++row;
-    // }
+        // -(vx_{k+1} - vx_k)/dt <= -amin  →  (vx_k - vx_{k+1})/dt <= -amin
+        Aint.emplace_back(row_lo, col_vx_k,   1.0 / P.dt);
+        Aint.emplace_back(row_lo, col_vx_k1, -1.0 / P.dt);
+        lin_v.push_back(-OSQP_INFTY);
+        uin_v.push_back(amin);
+        ++row;
+    }
+
+    // (8) Jerk bounds: -j_max <= (a_k - a_{k-1})/dt <= j_max
+    // This ensures the change in acceleration is smooth (passenger comfort).
+    // Units: Matrix output will be m/s^3 (Jerk).
+    
+    const double jmax = 1.5;                 // Comfort limit: 1.5 m/s^3
+    const double dt_sq_inv = 1.0 / (P.dt * P.dt); // 1 / dt^2
+
+    // You need the vehicle's CURRENT acceleration for the first step (k=0).
+    // If unknown, use 0.0, but it might cause a "kick" if you are already accelerating.
+    const double a_init = 0.0; // <--- REPLACE this with actual measurement if available!
+
+    for (int k = 0; k < N; ++k) {
+        const int row_jerk = row;
+
+        const int col_vx_k1 = idx_x(k + 1, id_vx); // v_{k+1}
+        const int col_vx_k  = idx_x(k,     id_vx); // v_k
+
+        if (k == 0) {
+            // ---------------------------------------------------------
+            // Case k=0: Link First Step to Current State
+            // Formula: (a_0 - a_init) / dt <= jmax
+            // Matrix Part: (v_1 - v_0) / dt^2
+            // Constant Part (moved to bounds): - a_init / dt
+            // ---------------------------------------------------------
+            
+            // Matrix: (v_1 - v_0) / dt^2
+            Aint.emplace_back(row_jerk, col_vx_k1,  dt_sq_inv);
+            Aint.emplace_back(row_jerk, col_vx_k,  -dt_sq_inv);
+
+            // Bounds: -jmax <= Matrix - a_init/dt <= jmax
+            // Rearranged: -jmax + a_init/dt <= Matrix <= jmax + a_init/dt
+            double bound_offset = a_init / P.dt;
+
+            lin_v.push_back(-jmax + bound_offset);
+            uin_v.push_back( jmax + bound_offset);
+            ++row;
+        } 
+        else {
+            // ---------------------------------------------------------
+            // Case k>0: Link Step k to Step k-1
+            // Formula: (a_k - a_{k-1}) / dt <= jmax
+            // Expanded: ( (v_{k+1}-v_k)/dt - (v_k-v_{k-1})/dt ) / dt
+            // Matrix Part: (v_{k+1} - 2*v_k + v_{k-1}) / dt^2
+            // ---------------------------------------------------------
+            const int col_vx_km1 = idx_x(k - 1, id_vx); // v_{k-1}
+
+            // v_{k+1} * (1/dt^2)
+            Aint.emplace_back(row_jerk, col_vx_k1,   dt_sq_inv);
+            // v_k     * (-2/dt^2)
+            Aint.emplace_back(row_jerk, col_vx_k,   -2.0 * dt_sq_inv);
+            // v_{k-1} * (1/dt^2)
+            Aint.emplace_back(row_jerk, col_vx_km1,  dt_sq_inv);
+
+            lin_v.push_back(-jmax);
+            uin_v.push_back( jmax);
+            ++row;
+        }
+    }
 
     // Stack equalities + inequalities
     const int meq   = (int)beq.size();
