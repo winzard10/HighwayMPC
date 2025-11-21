@@ -22,14 +22,16 @@ struct MPCParams {
     // weights
     double wy    = 2.5;
     double wpsi  = 0.10;
-    double wv    = 10.0;
-    double wR    = 1e-3;
+    double wv    = 0.50;
+    double wR    = 1e-4;
     double wdR   = 1e-5;
     double wddR  = 2e-5;
-    double wdd   = 80.0;
-    double wddd  = 100.0;
+    double wdd   = 8.0;
+    double wddd  = 10.0;
     double wyf   = 3.0;
     double wpsif = 8.0;
+
+    double w_acc_slack = 1e3;
 
     // bounds
     double v_min = 0.0,  v_max = 40.0;
@@ -43,6 +45,21 @@ struct MPCParams {
 struct PreviewPoint {
     double kappa = 0.0;  // road curvature
     double v_ref = 0.0;  // target speed
+};
+
+struct ACCBoundCoeffs {
+    std::vector<double> a_max_coeffs{
+        2.0,          // c0
+        -0.0425,      // c1
+        0.000125,     // c2
+        0.0     // c3
+        };  // size N
+    std::vector<double> a_min_coeffs{
+        -2.5,         // c0
+        0.0,     // c1
+        0.0,    // c2
+        0.0   // c3
+        };  // size N
 };
 
 // Horizon preview (sim fills hp[i].{kappa,v_ref})
@@ -116,6 +133,10 @@ public:
 
     // helpers
     static void angleWrap(double& a);
+    double ax_max(double vx, const ACCBoundCoeffs& coeffs);
+    double ax_min(double vx, const ACCBoundCoeffs& coeffs);
+    double acclimit(const std::vector<double>& coeffs, double vx);
+
 
 private:
     MPCParams P;

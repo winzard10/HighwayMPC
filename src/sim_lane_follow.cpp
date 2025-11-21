@@ -195,9 +195,11 @@ int main(int argc, char** argv) {
   {
     LanePose p0 = lanePoseAt(map, st.s, cli.lane_from);
     st.x = p0.x; st.y = p0.y; st.psi = p0.psi;
-    st.v = 20.0;
+    st.v = 25.0;
     st.delta = 0.0;
   }
+
+  double a_prev = 0.0;
 
   // --- Logging ---
   std::ofstream log(cli.log_file);
@@ -206,7 +208,7 @@ int main(int argc, char** argv) {
     return 1;
   }
   log << std::fixed << std::setprecision(6);
-  log << "t,s,x,y,psi,vx,vy,dpsi,delta,R_cmd,ddelta_cmd,ey,epsi,dv,"
+  log << "t,s,x,y,psi,vx,vy,dpsi,ax,jerk,delta,R_cmd,ddelta_cmd,ey,epsi,dv,"
          "v_ref,x_ref,y_ref,psi_ref,alpha,dmin,v_lead,d_gap,Fy_f,Fy_r\n";
 
   // --- Simulation loop ---
@@ -378,13 +380,15 @@ int main(int argc, char** argv) {
     std::cout << "Ffy: " << fr_now.Fy_f_body << ", Fyr: " << fr_now.Fy_r_body << "\n";
 
     log << t << "," << projC.s_proj << "," << st.x << "," << st.y << ","
-        << st.psi << "," << st.v << "," << -1.0 << "," << -1.0 << "," << st.delta << ","
+        << st.psi << "," << st.v << "," << -1.0 << "," << -1.0 << "," << st.ax << "," << (st.ax - a_prev) / vp.dt << "," << st.delta << "," 
         << u_cmd.R << "," << u_cmd.ddelta << ","
         << ey << "," << epsi << "," << dv << ","
         << cref.v_ref << "," << x_ref << "," << y_ref << "," << psi_ref << ","
         << alpha << "," << dmin << "," << v_lead_now << "," << d_gap << ","
         << fr_now.Fy_f_body << "," << fr_now.Fy_r_body << "\n";
   }
+
+  a_prev = st.ax;
 
   std::cout << "Log written to: " << cli.log_file << "\n";
   return 0;

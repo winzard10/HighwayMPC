@@ -45,19 +45,19 @@ State step(const State& s, const Control& u,
   const double F_wind = 0.0;
   
   // Solve for longitudinal acceleration from Eq. (6)
-  const double a_eff = (R_cmd - F_wind - coupling) / denom;
+  n.ax = (R_cmd - F_wind - coupling) / denom;
   
   // Safety check for extreme accelerations
   // const double a_clamped = clamp(a_eff, -10.0, 10.0);  // reasonable limits
   
-  if (std::abs(a_eff) > 15.0) {
-    std::cerr << "WARNING: Extreme acceleration " << a_eff 
+  if (std::abs(n.ax) > 15.0) {
+    std::cerr << "WARNING: Extreme acceleration " << n.ax 
               << " m/s² (R=" << R_cmd << " N, delta=" << s.delta 
               << " rad, v=" << s.v << " m/s)\n";
   }
   
   // integrate longitudinal velocity (Eq. 5: σ̇ = u)
-  n.v = std::max(0.0, s.v + a_eff * dt);
+  n.v = std::max(0.0, s.v + n.ax * dt);
   
   // Kinematic bicycle model for pose (Eq. 5)
   // Use CURRENT state values for consistent integration (forward Euler)

@@ -29,6 +29,8 @@ struct State {
   double x{0.0}, y{0.0}, psi{0.0};
   double v{0.0}, dpsi{0.0};
   double delta{0.0};
+
+  double ax{0.0};
 };
 
 struct Control {

@@ -83,6 +83,23 @@ void discretizeZOH(const Eigen::MatrixXd& A,
     }
 }
 
+
+double LTV_MPC::ax_min(double vx, const ACCBoundCoeffs& coeffs) { return acclimit(coeffs.a_min_coeffs, vx); }
+
+double LTV_MPC::ax_max(double vx, const ACCBoundCoeffs& coeffs) { return acclimit(coeffs.a_max_coeffs, vx); }
+
+double LTV_MPC::acclimit(const std::vector<double>& coeffs, double vx)
+{
+    double a = 0.0;
+    double U_pow = 1.0;   // U^0 initially
+
+    for (double c : coeffs) {
+        a += c * U_pow;
+        U_pow *= vx;       // next power
+    }
+    return a;
+}
+
 // ------------------------------------------------------------------
 // buildLinearization: simple kinematic bicycle linearization
 // States: [ey, epsi, v, delta], Inputs: [a, ddelta]
@@ -265,13 +282,17 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     const int id_d  = ACC_ENABLE ? 4 : -1;
     const int id_R      = 0, id_ddelta = 1;
 
-    const int NX = (N+1)*nx;
-    const int NU = N*nu;
-    const int NZ = NX + NU;
+    const int NX = (N + 1) * nx;
+    const int NU = N * nu;
+    const int Ns = ACC_ENABLE ? N : 0;
+    const int NZ = NX + NU + Ns;
 
     // indices
-    auto idx_x = [&](int k,int i){ return k*nx + i; };       // 0..NX-1
-    auto idx_u = [&](int k,int j){ return NX + k*nu + j; };  // NX..NX+NU-1
+    auto idx_x = [&](int k, int i) { return k * nx + i; };        // 0..NX-1
+    auto idx_u = [&](int k, int j) { return NX + k * nu + j; };   // NX..NX+NU-1
+    auto idx_s = [&](int k)        { return NX + NU + k; };     // NX+NU..NZ-1
+
+    ACCBoundCoeffs acc_coeffs;
 
     // -----------------------------
     // Bounds for ey (from corridor)
@@ -338,6 +359,10 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
                 Ht.emplace_back(uk,    ukm1, -2.0*w);
                 Ht.emplace_back(ukm1,  uk,   -2.0*w);
             }
+        }
+        if (ACC_ENABLE) {
+            const int isk = idx_s(k);
+            Ht.emplace_back(isk, isk, 2.0 * P.w_acc_slack);
         }
     }
     // --- propulsion "jerk": (R_k - 2 R_{k-1} + R_{k-2})^2
@@ -411,7 +436,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
                 if (val != 0.0) Aeqt.emplace_back(row_dyn(k,i), idx_u(k,j), val);
             }
             // rhs = -cd
-            beq(row_dyn(k,i)) = -cd(i);
+            beq(row_dyn(k,i)) = cd(i);
         }
     }
     // initial condition x_0 = x0
@@ -531,20 +556,122 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
         push_affine(1, lim_.Frl_max);  // rear
     }
 
-    // Gap lower bound d >= 0 (optional but nice to keep feasibility)
-    if (ACC_ENABLE){
-        for (int k=0; k<=N; ++k){
-            push_row_le(row, idx_x(k,id_d), 1.0, 0.0, +OSQP_INFTY); ++row;
+    // (6) ACC: d >= 0 and time-headway constraint if lead present
+    if (ACC_ENABLE) {
+        for (int k = 0; k <= N; ++k) {
+            push_row_le(row, idx_x(k, id_d), 1.0, 0.0, +OSQP_INFTY);
+            ++row;
         }
-        // ACC safety: d_k - tau * v_k >= d_min  (only if there's a lead at step k)
-        for (int k=0; k<N; ++k){
-            const bool has = (ref.has_obj.size() > (size_t)k) ? (ref.has_obj[k]!=0) : false;
+        // soft headway: d_k - tau*v_k + s_k >= dmin,  s_k >= 0
+        for (int k = 0; k < N; ++k) {
+            const bool has = (k < (int)ref.has_obj.size()) ? (ref.has_obj[k] != 0) : false;
             if (!has) continue;
-            // Aineq[row, id_d] = +1, Aineq[row, id_v] = -tau
-            Aint.emplace_back(row, idx_x(k,id_d),  +1.0);
-            Aint.emplace_back(row, idx_x(k,id_v),  -accp_.tau);
+
+            const int col_d   = idx_x(k, id_d);
+            const int col_vx  = idx_x(k, id_v);
+            const int col_sk  = idx_s(k);
+
+            // d_k - tau * v_k + s_k >= dmin
+            Aint.emplace_back(row, col_d,  +1.0);
+            Aint.emplace_back(row, col_vx, -accp_.tau);
+            Aint.emplace_back(row, col_sk, +1.0);
             lin_v.push_back(accp_.dmin);
             uin_v.push_back(+OSQP_INFTY);
+            ++row;
+
+            // s_k >= 0  →  1 * s_k >= 0
+            Aint.emplace_back(row, col_sk, 1.0);
+            lin_v.push_back(0.0);
+            uin_v.push_back(+OSQP_INFTY);
+            ++row;
+        }
+    }
+
+    // (7) acceleration bounds a_min(v) <= (vx_{k+1} - vx_k)/dt <= a_max(v)
+    for (int k = 0; k < N; ++k) {
+        const int row_up = row;
+        const int row_lo = row + 1;
+
+        // decide what speed to use for limits (vref or some nominal):
+        const int idx_ref = std::min<int>(k, (int)ref.hp.size() - 1);
+        const double vref = (idx_ref >= 0) ? ref.hp[idx_ref].v_ref : 0.0;
+
+        const double amax = ax_max(vref, acc_coeffs);
+        const double amin = ax_min(vref, acc_coeffs);
+
+        const int col_vx_k   = idx_x(k,   id_v);
+        const int col_vx_k1  = idx_x(k+1, id_v);
+
+        // (vx_{k+1} - vx_k)/dt <= amax
+        Aint.emplace_back(row_up, col_vx_k1,  1.0 / P.dt);
+        Aint.emplace_back(row_up, col_vx_k,  -1.0 / P.dt);
+        lin_v.push_back(-OSQP_INFTY);
+        uin_v.push_back(amax);
+        ++row;
+
+        // -(vx_{k+1} - vx_k)/dt <= -amin  →  (vx_k - vx_{k+1})/dt <= -amin
+        Aint.emplace_back(row_lo, col_vx_k,   1.0 / P.dt);
+        Aint.emplace_back(row_lo, col_vx_k1, -1.0 / P.dt);
+        lin_v.push_back(-OSQP_INFTY);
+        uin_v.push_back(amin);
+        ++row;
+    }
+
+    // (8) Jerk bounds: -j_max <= (a_k - a_{k-1})/dt <= j_max
+    // This ensures the change in acceleration is smooth (passenger comfort).
+    // Units: Matrix output will be m/s^3 (Jerk).
+    
+    const double jmax = 1.5;                 // Comfort limit: 1.5 m/s^3
+    const double dt_sq_inv = 1.0 / (P.dt * P.dt); // 1 / dt^2
+
+    // You need the vehicle's CURRENT acceleration for the first step (k=0).
+    // If unknown, use 0.0, but it might cause a "kick" if you are already accelerating.
+    const double a_init = 0.0; // <--- REPLACE this with actual measurement if available!
+
+    for (int k = 0; k < N; ++k) {
+        const int row_jerk = row;
+
+        const int col_vx_k1 = idx_x(k + 1, id_v); // v_{k+1}
+        const int col_vx_k  = idx_x(k,     id_v); // v_k
+
+        if (k == 0) {
+            // ---------------------------------------------------------
+            // Case k=0: Link First Step to Current State
+            // Formula: (a_0 - a_init) / dt <= jmax
+            // Matrix Part: (v_1 - v_0) / dt^2
+            // Constant Part (moved to bounds): - a_init / dt
+            // ---------------------------------------------------------
+            
+            // Matrix: (v_1 - v_0) / dt^2
+            Aint.emplace_back(row_jerk, col_vx_k1,  dt_sq_inv);
+            Aint.emplace_back(row_jerk, col_vx_k,  -dt_sq_inv);
+
+            // Bounds: -jmax <= Matrix - a_init/dt <= jmax
+            // Rearranged: -jmax + a_init/dt <= Matrix <= jmax + a_init/dt
+            double bound_offset = a_init / P.dt;
+
+            lin_v.push_back(-jmax + bound_offset);
+            uin_v.push_back( jmax + bound_offset);
+            ++row;
+        } 
+        else {
+            // ---------------------------------------------------------
+            // Case k>0: Link Step k to Step k-1
+            // Formula: (a_k - a_{k-1}) / dt <= jmax
+            // Expanded: ( (v_{k+1}-v_k)/dt - (v_k-v_{k-1})/dt ) / dt
+            // Matrix Part: (v_{k+1} - 2*v_k + v_{k-1}) / dt^2
+            // ---------------------------------------------------------
+            const int col_vx_km1 = idx_x(k - 1, id_v); // v_{k-1}
+
+            // v_{k+1} * (1/dt^2)
+            Aint.emplace_back(row_jerk, col_vx_k1,   dt_sq_inv);
+            // v_k     * (-2/dt^2)
+            Aint.emplace_back(row_jerk, col_vx_k,   -2.0 * dt_sq_inv);
+            // v_{k-1} * (1/dt^2)
+            Aint.emplace_back(row_jerk, col_vx_km1,  dt_sq_inv);
+
+            lin_v.push_back(-jmax);
+            uin_v.push_back( jmax);
             ++row;
         }
     }

@@ -13,34 +13,6 @@ static inline double clampAlpha(double a, double amax=0.6){
   return std::clamp(a, -amax, amax);
 }
 
-// double slipAngleFront(double vx,double vy,double r,double delta,double Lf){
-//   const double vx_eff = (std::abs(vx)<0.1) ? (vx>=0.0?0.1:-0.1) : vx;
-//   const double beta_f = std::atan2(vy + Lf*r, vx_eff);
-//   return clampAlpha(beta_f - delta);
-// }
-// double slipAngleRear(double vx,double vy,double r,double Lr){
-//   const double vx_eff = (std::abs(vx)<0.1) ? (vx>=0.0?0.1:-0.1) : vx;
-//   const double beta_r = std::atan2(vy - Lr*r, vx_eff);
-//   return clampAlpha(beta_r);
-// }
-
-// double pacejkaFy(double B,double C,double D,double E,double a){
-//   const double x = B*a;
-//   return D * std::sin( C * std::atan( x - E*(x - std::atan(x)) ) );
-// }
-
-static inline void clampEllipse(double& Fx, double& Fy, double mu, double Fz){
-  const double Fmax = std::max(1e-6, mu*Fz);
-  const double n = std::hypot(Fx, Fy);
-  if (n > Fmax){ const double s = Fmax/n; Fx*=s; Fy*=s; }
-}
-
-static inline void staticAxleLoads(double m,double g,double L,double d,
-                                   double& Fzf,double& Fzr){
-  Fzf = m*g*(L-d)/L;  // front axle
-  Fzr = m*g*(d)/L;    // rear axle
-}
-
 // ---- main API ----
 ForceResult computeForcesBody(double v,
                               double delta, double R_rear, double ddelta,
