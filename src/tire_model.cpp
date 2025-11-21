@@ -36,62 +36,6 @@ static inline void clampEllipse(double& Fx, double& Fy, double mu, double Fz){
   if (n > Fmax){ const double s = Fmax/n; Fx*=s; Fy*=s; }
 }
 
-// static inline void staticAxleLoads(double m,double g,double L,double d, double m_unsprung_f, double m_unsprung_r,
-//                                    double& Fzf,double& Fzr){
-//   Fzf = m*g*(L-d)/L + m_unsprung_f*g;  // front axle
-//   Fzr = m*g*(d)/L + m_unsprung_r*g;    // rear axle
-// }
-
-// static inline void dynamicLoads(double m,double g,double L,double d, double Kzx, double m_unsprung_f, double m_unsprung_r,
-//                                 double vx, double vy, double dpsi,
-//                                    double& Fzf,double& Fzr){
-//   Fzf = m*g*(L-d)/L + m_unsprung_f*g;  // front axle
-//   Fzr = m*g*(d)/L + m_unsprung_r*g;    // rear axle
-// }
-
-// // ---- main API ----
-// ForceResult computeForcesBody(double vx, double vy, double dpsi,
-//                               double delta, double R_rear,
-//                               const VehicleGeom& vg,
-//                               const TireParams& tp,
-//                               double g)
-// {
-//   ForceResult out;
-//   const double Lf = vg.L - vg.d, Lr = vg.d;
-//   const double Kzx = tp.Kzx;
-
-//   double Fzf_ax, Fzr_ax;
-//   staticAxleLoads(vg.m, g, vg.L, vg.d, tp.m_unsprung_front, tp.m_unsprung_rear, Fzf_ax, Fzr_ax);
-
-//   const double a_f = slipAngleFront(vx,vy,dpsi,delta,Lf);
-//   const double a_r = slipAngleRear (vx,vy,dpsi,      Lr);
-
-//   const double Df_w = tp.muf * (Fzf_ax * 0.5);  // per wheel
-//   const double Dr_w = tp.mur * (Fzr_ax * 0.5);
-
-//   double Fy_f_tire = -2.0 * pacejkaFy(tp.Bf,tp.Cf,Df_w,tp.Ef,a_f);
-//   double Fy_r_tire = -2.0 * pacejkaFy(tp.Br,tp.Cr,Dr_w,tp.Er,a_r);
-
-//   double Fx_f_tire = 0.0;       // RWD
-//   double Fx_r_tire = R_rear;
-
-//   clampEllipse(Fx_f_tire, Fy_f_tire, tp.muf, Fzf_ax);
-//   clampEllipse(Fx_r_tire, Fy_r_tire, tp.mur, Fzr_ax);
-
-//   const double c = std::cos(delta), s = std::sin(delta);
-//   out.Fx_f_body =  Fx_f_tire * c - Fy_f_tire * s;
-//   out.Fy_f_body =  Fx_f_tire * s + Fy_f_tire * c;
-
-//   out.Fx_r_body = Fx_r_tire;
-//   out.Fy_r_body = Fy_r_tire;
-
-//   out.Fx_sum = out.Fx_f_body + out.Fx_r_body;
-//   out.Fy_sum = out.Fy_f_body + out.Fy_r_body;
-//   out.Mz     =  Lf * out.Fy_f_body - Lr * out.Fy_r_body;
-//   return out;
-// }
-
-
 static inline void staticAxleLoads(double m_s, double g,
                                    double L, double d,
                                    double m_unsprung_f, double m_unsprung_r,

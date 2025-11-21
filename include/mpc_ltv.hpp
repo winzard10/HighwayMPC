@@ -22,7 +22,7 @@ struct MPCParams {
     // weights
     double wy    = 2.5;
     double wpsi  = 0.10;
-    double wv    = 0.25;
+    double wv    = 1.0;
     double wR    = 1e-4;
     double wdR   = 1e-5;
     double wddR  = 2e-5;
@@ -31,7 +31,7 @@ struct MPCParams {
     double wyf   = 3.0;
     double wpsif = 8.0;
 
-    double w_acc_slack = 1e6;
+    double w_acc_slack = 1e3;
 
     // bounds
     double ddelta_max = 0.25;

@@ -444,7 +444,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
                 const double v = -Bd(i, j);
                 if (v != 0.0) Aeqt.emplace_back(row_dyn(k, i), idx_u(k, j), v);
             }
-            beq(row_dyn(k, i)) = -cd(i);
+            beq(row_dyn(k, i)) = cd(i);
         }
     }
 
