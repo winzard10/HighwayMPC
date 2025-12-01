@@ -10,6 +10,8 @@
 #include "tire_model.hpp"     // dynamics::tire::{TireParams,current}
 #include "acc.hpp"            // acc::Params
 
+using VControl = dynamics::vehicle::Control;
+
 namespace acc { struct Params; }
 
 // ---------------------------------
@@ -22,7 +24,7 @@ struct MPCParams {
     // weights
     double wy    = 2.5;
     double wpsi  = 0.10;
-    double wv    = 0.25;
+    double wv    = 1.0;
     double wR    = 1e-4;
     double wdR   = 1e-5;
     double wddR  = 2e-5;
@@ -133,12 +135,12 @@ public:
 
     // Model + QP
     void        buildLinearization(const MPCRef& ref);
-    MPCControl  solveQP(const MPCState& x0, const MPCRef& ref);
+    MPCControl  solveQP(const MPCState& x0, const MPCRef& ref, const VControl& u_prev, double ax_prev);
 
     // Convenience wrapper
-    MPCControl solve(const MPCState& x0, const MPCRef& ref) {
+    MPCControl solve(const MPCState& x0, const MPCRef& ref, const VControl& u_prev, double ax_prev) {
         buildLinearization(ref);
-        return solveQP(x0, ref);
+        return solveQP(x0, ref, u_prev, ax_prev);
     }
 
     // helpers

@@ -246,7 +246,7 @@ axs[7].set_xlabel("Time [s]"); axs[7].set_ylabel("Acceleration")
 axs[7].legend(); axs[7].grid(True)
 
 # 10) Jerk
-axs[8].plot(t[1:], jerk[1:], label="Jerk [m/s^3]")
+axs[8].plot(t[2:], jerk[2:], label="Jerk [m/s^3]")
 axs[8].set_title("Jerk")
 axs[8].set_xlabel("Time [s]"); axs[8].set_ylabel("Jerk [m/s³]")
 axs[8].legend(); axs[8].grid(True)

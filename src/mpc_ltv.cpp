@@ -18,6 +18,8 @@ using Eigen::VectorXd;
 using Eigen::SparseMatrix;
 using Eigen::Triplet;
 
+using VControl = dynamics::vehicle::Control;
+
 #ifndef OSQP_INFTY
 #define OSQP_INFTY 1e20
 #endif
@@ -287,7 +289,7 @@ void LTV_MPC::setCorridorBounds(const std::vector<double>& lo,
 // solveQP: assemble constraints/cost and solve (first input returned)
 // Uses triplet assembly (no sparse block assignment).
 // ------------------------------------------------------------------
-MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
+MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VControl& u_prev, double ax_prev) {
     using Eigen::VectorXd;
     using Eigen::SparseMatrix;
     using Eigen::Triplet;
@@ -492,6 +494,53 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
         push_row_le(row, idx_u(k, id_ddelta), 1.0, -lim_.ddelta_max,  lim_.ddelta_max);   ++row;  // ddelta
     }
 
+    // // (2) Input boxes (Modified for Friction Circle Coupling)
+    // for (int k = 0; k < N; ++k) {
+    //     // ---------------------------------------------------------
+    //     // A. Dynamic Friction Circle Limit for R (Longitudinal Force)
+    //     // ---------------------------------------------------------
+    //     const int idx = std::min<int>(k, (int)ref.hp.size() - 1);
+        
+    //     // Use a minimum speed to avoid singular behavior at absolute 0
+    //     const double vref = std::max(1.0, (idx >= 0) ? ref.hp[idx].v_ref : 0.0);
+    //     const double kappa = std::abs(ref.hp[idx].kappa);
+
+    //     // 1. Estimate Lateral Force Demand: Fy = m * v^2 * kappa
+    //     // This predicts how much grip the turn will consume.
+    //     double Fy_demand = vp_.m * vref * vref * kappa;
+        
+    //     // 2. Define Max Total Grip: F_total = mu * m * g
+    //     // (Assume mu = 0.9 for dry road. In real app, this comes from an estimator)
+    //     double F_max_grip = 0.9 * vp_.m * 9.81;
+
+    //     // 3. Calculate Available Longitudinal Force
+    //     // Diamond Approximation: |Fx| + |Fy| <= F_total
+    //     // Therefore: |Fx| <= F_total - |Fy|
+    //     double Fx_available = std::max(100.0, F_max_grip - Fy_demand);
+        
+    //     // 4. Clamp to physical engine/brake limits
+    //     double R_upper = std::min(lim_.R_max, Fx_available);
+    //     double R_lower = std::max(lim_.R_min, -Fx_available);
+
+    //     // Apply dynamic bounds to R
+    //     push_row_le(row, idx_u(k, id_R), 1.0, R_lower, R_upper);        
+    //     ++row;  
+
+    //     // ---------------------------------------------------------
+    //     // B. Steering Rate Limits (ddelta)
+    //     // ---------------------------------------------------------
+    //     // (If you implemented the dynamic steering rate limit we discussed 
+    //     // earlier, put that calculation here. Otherwise, use static limits.)
+        
+    //     // Dynamic steering rate limit based on speed (Jerk limit ~0.9 m/s^3)
+    //     double ddelta_dyn = (vp_.L * 0.9) / (vref * vref);
+    //     ddelta_dyn = std::min(ddelta_dyn, lim_.ddelta_max);
+    //     ddelta_dyn = std::max(ddelta_dyn, 0.05); // Minimum steer capability
+
+    //     push_row_le(row, idx_u(k, id_ddelta), 1.0, -ddelta_dyn, ddelta_dyn);   
+    //     ++row;
+    // }
+
     // (3) steering angle bounds
     for (int k = 0; k <= N; ++k) {
         push_row_le(row, idx_x(k, id_delta), 1.0, -lim_.delta_max, lim_.delta_max);
@@ -564,7 +613,37 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
         }
     }
 
-    // (7) acceleration bounds a_min(v) <= (vx_{k+1} - vx_k)/dt <= a_max(v)
+    // // (7) acceleration bounds a_min(v) <= (vx_{k+1} - vx_k)/dt <= a_max(v)
+    // for (int k = 0; k < N; ++k) {
+    //     const int row_up = row;
+    //     const int row_lo = row + 1;
+
+    //     // decide what speed to use for limits (vref or some nominal):
+    //     const int idx_ref = std::min<int>(k, (int)ref.hp.size() - 1);
+    //     const double vref = (idx_ref >= 0) ? ref.hp[idx_ref].v_ref : 0.0;
+
+    //     const double amax = ax_max(vref, acc_coeffs);
+    //     const double amin = ax_min(vref, acc_coeffs);
+
+    //     const int col_vx_k   = idx_x(k,   id_vx);
+    //     const int col_vx_k1  = idx_x(k+1, id_vx);
+
+    //     // (vx_{k+1} - vx_k)/dt <= amax
+    //     Aint.emplace_back(row_up, col_vx_k1,  1.0 / P.dt);
+    //     Aint.emplace_back(row_up, col_vx_k,  -1.0 / P.dt);
+    //     lin_v.push_back(-OSQP_INFTY);
+    //     uin_v.push_back(amax);
+    //     ++row;
+
+    //     // -(vx_{k+1} - vx_k)/dt <= -amin  →  (vx_k - vx_{k+1})/dt <= -amin
+    //     Aint.emplace_back(row_lo, col_vx_k,   1.0 / P.dt);
+    //     Aint.emplace_back(row_lo, col_vx_k1, -1.0 / P.dt);
+    //     lin_v.push_back(-OSQP_INFTY);
+    //     uin_v.push_back(amin);
+    //     ++row;
+    // }
+
+    // (7) acceleration bounds: amin <= (vx_{k+1} - vx_k)/dt <= amax
     for (int k = 0; k < N; ++k) {
         const int row_up = row;
         const int row_lo = row + 1;
@@ -573,85 +652,158 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
         const int idx_ref = std::min<int>(k, (int)ref.hp.size() - 1);
         const double vref = (idx_ref >= 0) ? ref.hp[idx_ref].v_ref : 0.0;
 
-        const double amax = ax_max(vref, acc_coeffs);
-        const double amin = ax_min(vref, acc_coeffs);
+        const double amax = ax_max(vref, acc_coeffs); // e.g.  2.0
+        const double amin = ax_min(vref, acc_coeffs); // e.g. -3.5
 
         const int col_vx_k   = idx_x(k,   id_vx);
         const int col_vx_k1  = idx_x(k+1, id_vx);
+        const double inv_dt  = 1.0 / P.dt;
 
-        // (vx_{k+1} - vx_k)/dt <= amax
-        Aint.emplace_back(row_up, col_vx_k1,  1.0 / P.dt);
-        Aint.emplace_back(row_up, col_vx_k,  -1.0 / P.dt);
-        lin_v.push_back(-OSQP_INFTY);
+        // Constraint: amin <= (vx_{k+1} - vx_k)/dt <= amax
+        // A matrix represents: (1/dt)*vx_{k+1} + (-1/dt)*vx_k
+        Aint.emplace_back(row, col_vx_k1,  inv_dt);
+        Aint.emplace_back(row, col_vx_k,  -inv_dt);
+        
+        // Lower Bound = amin (e.g. -3.5)
+        lin_v.push_back(amin);
+        
+        // Upper Bound = amax (e.g. 2.0)
         uin_v.push_back(amax);
-        ++row;
-
-        // -(vx_{k+1} - vx_k)/dt <= -amin  →  (vx_k - vx_{k+1})/dt <= -amin
-        Aint.emplace_back(row_lo, col_vx_k,   1.0 / P.dt);
-        Aint.emplace_back(row_lo, col_vx_k1, -1.0 / P.dt);
-        lin_v.push_back(-OSQP_INFTY);
-        uin_v.push_back(amin);
+        
         ++row;
     }
 
-    // (8) Jerk bounds: -j_max <= (a_k - a_{k-1})/dt <= j_max
-    // This ensures the change in acceleration is smooth (passenger comfort).
-    // Units: Matrix output will be m/s^3 (Jerk).
+    // // (8) Jerk bounds: -j_max <= (a_k - a_{k-1})/dt <= j_max
+    // // This ensures the change in acceleration is smooth (passenger comfort).
+    // // Units: Matrix output will be m/s^3 (Jerk).
     
-    const double jmax = 1.5;                 // Comfort limit: 1.5 m/s^3
-    const double dt_sq_inv = 1.0 / (P.dt * P.dt); // 1 / dt^2
+    // const double jmax = 1.5;                 // Comfort limit: 1.5 m/s^3
+    // const double dt_sq_inv = 1.0 / (P.dt * P.dt); // 1 / dt^2
 
-    // You need the vehicle's CURRENT acceleration for the first step (k=0).
-    // If unknown, use 0.0, but it might cause a "kick" if you are already accelerating.
-    const double a_init = 0.0; // <--- REPLACE this with actual measurement if available!
+    // // You need the vehicle's CURRENT acceleration for the first step (k=0).
+    // // If unknown, use 0.0, but it might cause a "kick" if you are already accelerating.
+    // const double a_init = ax_prev; // <--- REPLACE this with actual measurement if available!
 
-    for (int k = 0; k < N; ++k) {
-        const int row_jerk = row;
+    // for (int k = 0; k < N; ++k) {
+    //     const int row_jerk = row;
 
-        const int col_vx_k1 = idx_x(k + 1, id_vx); // v_{k+1}
-        const int col_vx_k  = idx_x(k,     id_vx); // v_k
+    //     const int col_vx_k1 = idx_x(k + 1, id_vx); // v_{k+1}
+    //     const int col_vx_k  = idx_x(k,     id_vx); // v_k
 
-        if (k == 0) {
-            // ---------------------------------------------------------
-            // Case k=0: Link First Step to Current State
-            // Formula: (a_0 - a_init) / dt <= jmax
-            // Matrix Part: (v_1 - v_0) / dt^2
-            // Constant Part (moved to bounds): - a_init / dt
-            // ---------------------------------------------------------
+    //     if (k == 0) {
+    //         // ---------------------------------------------------------
+    //         // Case k=0: Link First Step to Current State
+    //         // Formula: (a_0 - a_init) / dt <= jmax
+    //         // Matrix Part: (v_1 - v_0) / dt^2
+    //         // Constant Part (moved to bounds): - a_init / dt
+    //         // ---------------------------------------------------------
             
-            // Matrix: (v_1 - v_0) / dt^2
-            Aint.emplace_back(row_jerk, col_vx_k1,  dt_sq_inv);
-            Aint.emplace_back(row_jerk, col_vx_k,  -dt_sq_inv);
+    //         // Matrix: (v_1 - v_0) / dt^2
+    //         Aint.emplace_back(row_jerk, col_vx_k1,  dt_sq_inv);
+    //         Aint.emplace_back(row_jerk, col_vx_k,  -dt_sq_inv);
 
-            // Bounds: -jmax <= Matrix - a_init/dt <= jmax
-            // Rearranged: -jmax + a_init/dt <= Matrix <= jmax + a_init/dt
-            double bound_offset = a_init / P.dt;
+    //         // Bounds: -jmax <= Matrix - a_init/dt <= jmax
+    //         // Rearranged: -jmax + a_init/dt <= Matrix <= jmax + a_init/dt
+    //         double bound_offset = a_init / P.dt;
 
-            lin_v.push_back(-jmax + bound_offset);
-            uin_v.push_back( jmax + bound_offset);
-            ++row;
-        } 
-        else {
-            // ---------------------------------------------------------
-            // Case k>0: Link Step k to Step k-1
-            // Formula: (a_k - a_{k-1}) / dt <= jmax
-            // Expanded: ( (v_{k+1}-v_k)/dt - (v_k-v_{k-1})/dt ) / dt
-            // Matrix Part: (v_{k+1} - 2*v_k + v_{k-1}) / dt^2
-            // ---------------------------------------------------------
-            const int col_vx_km1 = idx_x(k - 1, id_vx); // v_{k-1}
+    //         lin_v.push_back(-jmax + bound_offset);
+    //         uin_v.push_back( jmax + bound_offset);
+    //         ++row;
+    //     } 
+    //     else {
+    //         // ---------------------------------------------------------
+    //         // Case k>0: Link Step k to Step k-1
+    //         // Formula: (a_k - a_{k-1}) / dt <= jmax
+    //         // Expanded: ( (v_{k+1}-v_k)/dt - (v_k-v_{k-1})/dt ) / dt
+    //         // Matrix Part: (v_{k+1} - 2*v_k + v_{k-1}) / dt^2
+    //         // ---------------------------------------------------------
+    //         const int col_vx_km1 = idx_x(k - 1, id_vx); // v_{k-1}
 
-            // v_{k+1} * (1/dt^2)
-            Aint.emplace_back(row_jerk, col_vx_k1,   dt_sq_inv);
-            // v_k     * (-2/dt^2)
-            Aint.emplace_back(row_jerk, col_vx_k,   -2.0 * dt_sq_inv);
-            // v_{k-1} * (1/dt^2)
-            Aint.emplace_back(row_jerk, col_vx_km1,  dt_sq_inv);
+    //         // v_{k+1} * (1/dt^2)
+    //         Aint.emplace_back(row_jerk, col_vx_k1,   dt_sq_inv);
+    //         // v_k     * (-2/dt^2)
+    //         Aint.emplace_back(row_jerk, col_vx_k,   -2.0 * dt_sq_inv);
+    //         // v_{k-1} * (1/dt^2)
+    //         Aint.emplace_back(row_jerk, col_vx_km1,  dt_sq_inv);
 
-            lin_v.push_back(-jmax);
-            uin_v.push_back( jmax);
-            ++row;
-        }
-    }
+    //         lin_v.push_back(-jmax);
+    //         uin_v.push_back( jmax);
+    //         ++row;
+    //     }
+    // }
+
+    // // (9) Force Slew Rate Limit (Smooths out the Gas/Brake pedal)
+    // // Constraint: -dR_max <= R_k - R_{k-1} <= dR_max
+    // {
+    //     // Limit jerk to 2.0 m/s^3 for propulsion changes
+    //     // For a 1500kg car @ 0.05s dt, this is ~150 N per step
+    //     double max_jerk_force = 2.0; 
+    //     double max_delta_R = vp_.m * max_jerk_force * P.dt;
+
+    //     for (int k = 0; k < N; ++k) {
+    //         const int col_R_k = idx_u(k, id_R);
+            
+    //         // For k=0, constrain against the PREVIOUS ACTUAL command
+    //         if (k == 0) {
+    //             // // You need to pass the last applied R (u_prev) to solveQP
+    //             // // For now, use 0.0 or x0.ax * mass if u_prev is unavailable
+    //             // double R_prev = u_prev.R;
+                
+    //             // // R_0 - R_prev <= max_delta
+    //             // Aint.emplace_back(row, col_R_k, 1.0);
+    //             // lin_v.push_back(R_prev - max_delta_R);
+    //             // uin_v.push_back(R_prev + max_delta_R);
+    //             // ++row;
+    //         } 
+    //         else {
+    //             // R_k - R_{k-1} <= max_delta
+    //             const int col_R_km1 = idx_u(k - 1, id_R);
+                
+    //             Aint.emplace_back(row, col_R_k,    1.0);
+    //             Aint.emplace_back(row, col_R_km1, -1.0);
+    //             lin_v.push_back(-max_delta_R);
+    //             uin_v.push_back( max_delta_R);
+    //             ++row;
+    //         }
+    //     }
+    // }
+
+    // // (10) Steering Slew Rate Limit (Steering Acceleration)
+    // // Constraint: -d_ddelta_max <= ddelta_k - ddelta_{k-1} <= d_ddelta_max
+    // {
+    //     // Limit steering angular acceleration to 5.0 rad/s^2
+    //     // (Typical autonomous steering motors are 5-10 rad/s^2)
+    //     double max_steer_accel = 5.0; 
+    //     double max_d_ddelta = max_steer_accel * P.dt;
+
+    //     for (int k = 0; k < N; ++k) {
+    //         const int col_dd_k = idx_u(k, id_ddelta);
+            
+    //         // For k=0, constrain against previous ACTUAL steering rate
+    //         if (k == 0) {
+    //             // You need to pass the current steering rate from x0 or sensors
+    //             // Assuming x0 has 'd_delta' or similar. If not, use 0.0 or x0.delta - x_prev.delta
+    //             // Let's assume you add 'current_ddelta' to your inputs, or approximate with 0.
+    //             double dd_prev = u_prev.ddelta;
+                
+    //             // ddelta_0 - dd_prev <= max_delta
+    //             Aint.emplace_back(row, col_dd_k, 1.0);
+    //             lin_v.push_back(dd_prev - max_d_ddelta);
+    //             uin_v.push_back(dd_prev + max_d_ddelta);
+    //             ++row;
+    //         } 
+    //         else {
+    //             // ddelta_k - ddelta_{k-1} <= max_delta
+    //             const int col_dd_km1 = idx_u(k - 1, id_ddelta);
+                
+    //             Aint.emplace_back(row, col_dd_k,    1.0);
+    //             Aint.emplace_back(row, col_dd_km1, -1.0);
+    //             lin_v.push_back(-max_d_ddelta);
+    //             uin_v.push_back( max_d_ddelta);
+    //             ++row;
+    //         }
+    //     }
+    // }
 
     // Stack equalities + inequalities
     const int meq   = (int)beq.size();

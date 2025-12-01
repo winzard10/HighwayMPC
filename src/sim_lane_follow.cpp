@@ -202,8 +202,6 @@ int main(int argc, char** argv) {
     st.delta = 0.0;
   }
 
-  double ax_prev = 0.0;  // for logging jerk
-
   // --- Logging ---
   std::ofstream log(cli.log_file);
   if (!log) {
@@ -216,6 +214,9 @@ int main(int argc, char** argv) {
 
   // --- Simulation loop ---
   const int steps = static_cast<int>(cli.T / vp.dt);
+  std::vector<VControl>  u_mpc_h(steps); // log of MPC commands
+  std::vector<double>    ax_h(steps);    // log of accelerations
+
   for (int k = 0; k <= steps; ++k) {
     const double t = k * vp.dt;
 
@@ -338,7 +339,12 @@ int main(int argc, char** argv) {
     }
 
     // --- Solve MPC ---
-    MPCControl u_mpc = mpc.solve(xk, pref);
+    VControl u_mpc_prev;
+    double ax_prev;
+    if (k > 0) {u_mpc_prev = u_mpc_h[k - 1]; ax_prev = ax_h[k - 1];}
+    else       {u_mpc_prev = VControl{0.0, 0.0};   ax_prev = 0.0;      }
+
+    MPCControl u_mpc = mpc.solve(xk, pref, u_mpc_prev, ax_prev);
     if (!u_mpc.ok) { u_mpc.R = 0.0; u_mpc.ddelta = 0.0; }
 
     // --- Measure min distance to active obstacles (for logging) ---
@@ -355,6 +361,8 @@ int main(int argc, char** argv) {
     const double R_cmd      = clamp(u_mpc.R,      lim.R_min, lim.R_max);
     const double ddelta_cmd = clamp(u_mpc.ddelta, -lim.ddelta_max, lim.ddelta_max);
     const VControl u_cmd{R_cmd, ddelta_cmd};
+    u_mpc_h[k] = u_cmd;
+    ax_h[k]    = st.ax;
 
     // advance plant with tire-slip dynamics using the same centralized params
     st = stepVehicle(st, u_cmd, vp, lim, dynamics::tire::current());
@@ -390,8 +398,6 @@ int main(int argc, char** argv) {
         << cref.v_ref << "," << x_ref << "," << y_ref << "," << psi_ref << ","
         << alpha << "," << dmin << "," << v_lead_now << "," << d_gap << ","
         << fr_now.Fy_f_body << "," << fr_now.Fy_r_body << "\n";
-    
-    ax_prev = st.ax;
   }
 
   std::cout << "Log written to: " << cli.log_file << "\n";
