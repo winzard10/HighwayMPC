@@ -24,12 +24,12 @@ struct MPCParams {
     // weights
     double wy    = 2.0;
     double wpsi  = 0.1;
-    double wv    = 1.5;        // 0.5 to see smoother ddelta/trajectory // 1.5
+    double wv    = 2.5;
     double wR    = 1e-4;
     double wdR   = 1e-5;
     double wddR  = 2e-5;
-    double wdd   = 8.0;
-    double wddd  = 2.0;
+    double wdd   = 12.0;
+    double wddd  = 5.0;
     double wyf   = 3.0;
     double wpsif = 8.0;
 
