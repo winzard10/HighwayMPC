@@ -7,10 +7,13 @@ namespace dynamics::tire {
 
 // -------- Parameters --------
 struct TireParams {
-  double muf{1.00};  // front axle friction
-  double mur{1.00};  // rear axle friction
-  double Bf{7.8727}, Cf{2.5296}, Ef{1.3059};  // front MF
-  double Br{7.8727}, Cr{2.5296}, Er{1.3059};  // rear  MF
+  double muf{0.9};  // front axle friction
+  double mur{0.9};  // rear axle friction
+  // double Bf{13.0}, Cf{1.3}, Ef{-0.9};  // front MF
+  // double Br{13.0}, Cr{1.3}, Er{-0.9};  // rear  MF
+  double Bf{13.0}, Cf{1.285}, Ef{-0.9};  // front MF
+  double Br{13.0}, Cr{1.285}, Er{-0.9};  // rear  MF
+
 
   double m_unsprung_front{120.0}; // per axle
   double m_unsprung_rear{80.0};  // per axle

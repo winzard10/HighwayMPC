@@ -211,7 +211,7 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         x0(id_vx) = std::max(0.0, ref.hp[idx].v_ref);  // vx nominal
         x0(id_vy) = 0.0;                               // vy
         x0(id_r) = 0.0;                               // yaw rate r
-        x0(id_delta) = 0.0;                               // delta
+        x0(id_delta) = vp_.L * ref.hp[idx].kappa;     // delta
         if (ACC_ENABLE) x0(id_d) = 0.0;            // gap
 
         // one-step view for reference fields at stage k
