@@ -175,19 +175,6 @@ centerline/fast:
 .PHONY : centerline/fast
 
 #=============================================================================
-# Target rules for targets named centerline_demo
-
-# Build rule for target.
-centerline_demo: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 centerline_demo
-.PHONY : centerline_demo
-
-# fast build rule for target.
-centerline_demo/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/centerline_demo.dir/build.make CMakeFiles/centerline_demo.dir/build
-.PHONY : centerline_demo/fast
-
-#=============================================================================
 # Target rules for targets named dynamics
 
 # Build rule for target.
@@ -227,6 +214,19 @@ corridor_planner/fast:
 .PHONY : corridor_planner/fast
 
 #=============================================================================
+# Target rules for targets named acc
+
+# Build rule for target.
+acc: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 acc
+.PHONY : acc
+
+# fast build rule for target.
+acc/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/acc.dir/build.make CMakeFiles/acc.dir/build
+.PHONY : acc/fast
+
+#=============================================================================
 # Target rules for targets named mpc
 
 # Build rule for target.
@@ -240,17 +240,17 @@ mpc/fast:
 .PHONY : mpc/fast
 
 #=============================================================================
-# Target rules for targets named acc
+# Target rules for targets named centerline_demo
 
 # Build rule for target.
-acc: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 acc
-.PHONY : acc
+centerline_demo: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 centerline_demo
+.PHONY : centerline_demo
 
 # fast build rule for target.
-acc/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/acc.dir/build.make CMakeFiles/acc.dir/build
-.PHONY : acc/fast
+centerline_demo/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/centerline_demo.dir/build.make CMakeFiles/centerline_demo.dir/build
+.PHONY : centerline_demo/fast
 
 #=============================================================================
 # Target rules for targets named sim_lane_follow

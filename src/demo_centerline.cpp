@@ -1,9 +1,23 @@
+/// ----------------------------------------- ///
+/// Centerline Map Demo (demo_centerline.cpp) ///
+/// ----------------------------------------- ///
+
 #include "centerline_map.hpp"
 #include <iostream>
 #include <filesystem>
 #include <vector>
 namespace fs = std::filesystem;
 
+// Try to locate a default lane_centerlines.csv if the user doesn't pass a path.
+//
+// Search order:
+//   1) ./data/lane_centerlines.csv                       (relative to CWD)
+//   2) <exe_dir>/data/lane_centerlines.csv               (post-build layout)
+//   3) <exe_dir>/../share/hwy_mpc/data/lane_centerlines.csv  (installed layout, optional)
+//
+// Returns:
+//   - valid path if found
+//   - empty path if nothing exists
 static fs::path find_default_map_path(const char* argv0) {
     // Candidate locations to try when no path is provided:
     // 1) ./data/
@@ -28,8 +42,10 @@ static fs::path find_default_map_path(const char* argv0) {
 int main(int argc, char** argv) {
     fs::path csv_path;
     if (argc > 1) {
+        // If user provided a path on the command line, use that.
         csv_path = argv[1];
     } else {
+        // Otherwise, try to auto-discover using default search paths.
         csv_path = find_default_map_path(argv[0]);
     }
 
@@ -48,6 +64,10 @@ int main(int argc, char** argv) {
     std::cout << "Loaded " << map.size() << " samples from: " << csv_path << "\n";
     std::cout << "s in [" << map.s_min() << ", " << map.s_max() << "]\n";
 
+    // Query a few sample arclengths across the map range:
+    //   - s_min
+    //   - 25%, 50%, 75% of the span
+    //   - s_max
     double qs[] = {map.s_min(), 0.25*(map.s_min()+map.s_max()),
                    0.5*(map.s_min()+map.s_max()),
                    0.75*(map.s_min()+map.s_max()),

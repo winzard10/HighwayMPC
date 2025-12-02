@@ -1,8 +1,12 @@
+/// --------------------------------------------- /// 
+/// Highway LTV-MPC implementation (mpc_ltv.cpp)  ///
+/// --------------------------------------------- ///
+
 #include "mpc_ltv.hpp"
 #include "obstacles.hpp"
-#include "tire_model.hpp"     
-#include "vehicle_model.hpp"  
-#include "acc.hpp"
+#include "tire_model.hpp"     // tire forces / Magic Formula + geometry
+#include "vehicle_model.hpp"  // vehicle mass / geometry params
+#include "acc.hpp"            // ACC (Adaptive Cruise Control) parameters
 
 #include <OsqpEigen/OsqpEigen.h>
 #include <Eigen/Dense>
@@ -31,19 +35,33 @@ static inline double clamp(double x, double a, double b){
     return std::min(std::max(x,a),b);
 }
 
+// Wrap angle into (-pi, pi]
 void LTV_MPC::angleWrap(double& a) {
     while (a <= -M_PI) a += 2.0 * M_PI;
     while (a >    M_PI) a -= 2.0 * M_PI;
 }
 
+// Store vehicle parameters (mass, wheelbase, etc.)
 void LTV_MPC::setVehicleParams(const dynamics::vehicle::Params& vp) {
     vp_ = vp;
   }
   
+// Store actuation / state limits
 void LTV_MPC::setLimits(const dynamics::vehicle::Limits& L) {
     lim_ = L;
   }
 
+// ------------------------------------------------------------------
+// Zero-Order Hold (ZOH) discretization of continuous-time affine system:
+//
+//   x_dot = A x + B u + d
+//
+// Produces discrete-time system:
+//
+//   x_{k+1} = Ad x_k + Bd u_k + cd
+//
+// using matrix exponential-based Van Loan formulation.
+// ------------------------------------------------------------------
 void discretizeZOH(const Eigen::MatrixXd& A,
     const Eigen::MatrixXd& B,         // may be (n×0) if no inputs
     const Eigen::VectorXd& d,         // may be size-0 if no affine term
@@ -85,10 +103,13 @@ void discretizeZOH(const Eigen::MatrixXd& A,
     }
 }
 
+// Speed-dependent longitudinal acceleration bounds:
+//  amin(vx), amax(vx) are polynomials in vx.
 double LTV_MPC::ax_min(double vx, const ACCBoundCoeffs& coeffs) { return acclimit(coeffs.a_min_coeffs, vx); }
 
 double LTV_MPC::ax_max(double vx, const ACCBoundCoeffs& coeffs) { return acclimit(coeffs.a_max_coeffs, vx); }
 
+// Evaluate polynomial a(vx) = c0 + c1*vx + c2*vx^2 + ...
 double LTV_MPC::acclimit(const std::vector<double>& coeffs, double vx)
 {
     double a = 0.0;
@@ -103,17 +124,34 @@ double LTV_MPC::acclimit(const std::vector<double>& coeffs, double vx)
 
 // ------------------------------------------------------------------
 // buildLinearization: Dynamic bicycle model with lateral tire slip
+//
 // States: [ey, epsi, vx, vy, r, delta, (d)]
+//   ey    : lateral error in Frenet frame
+//   epsi  : heading error in Frenet frame
+//   vx    : longitudinal velocity (body frame)
+//   vy    : lateral velocity (body frame)
+//   r     : yaw rate
+//   delta : steering angle
+//   d     : spacing to lead vehicle (if ACC enabled)
+//
 // Inputs: [R_cmd, ddelta]
-//  ey_dot   ≈ vx*sin(epsi) + vy*cos(epsi)
-//  epsi_dot ≈ r - kappa_ref*vx
-//  vx_dot   = ax
-//  vy_dot   = ay
-//  r_dot    = rdot
-//  v_dot    = a
-//  delta_dot= ddelta
-//  d_dot    = v_obj - vx   (if ACC enabled)
-// Discretization: Zero-Order Hold (ZOH)
+//   R_cmd : rear-axle longitudinal generalized "force" (mapped to ax)
+//   ddelta: steering rate (delta_dot)
+//
+// Continuous-time dynamics are given by:
+//  ey_dot    ≈ vx*sin(epsi) + vy*cos(epsi)
+//  epsi_dot  ≈ r - kappa_ref*vx
+//  vx_dot    = ax (from tire / longitudinal forces)
+//  vy_dot    = ay (from lateral tire forces)
+//  r_dot     = yaw moment / inertia
+//  delta_dot = ddelta
+//  d_dot     = v_obj - vx   (if ACC enabled)
+//
+// This function:
+//  1. Linearizes the dynamics around a nominal trajectory (x0,u0) per step.
+//  2. Uses finite differences for Jacobians A,B.
+//  3. Discretizes via ZOH to store Ad,Bd,cd in lm_.
+//  4. Populates nominal rollouts nom_.x/nom_.u used elsewhere (e.g. logging).
 // ------------------------------------------------------------------
 void LTV_MPC::buildLinearization(const MPCRef& ref) {
     using Eigen::MatrixXd;
@@ -135,12 +173,14 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
     const int id_R      = 0;;
     const int id_ddelta = 1;
 
-    // allocate horizon containers
+    // allocate horizon containers for discrete linear model
     lm_.A.assign(N, MatrixXd::Identity(nx, nx));
     lm_.B.assign(N, MatrixXd::Zero(nx, nu));
     lm_.c.assign(N, VectorXd::Zero(nx));
 
     // -------- helper: continuous-time f(x,u; ref_k) ----------
+    // This lambda represents the nonlinear continuous dynamics used
+    // for finite-difference linearization.
     auto f_dyn = [&](const VectorXd& x,
                      const VectorXd& u,
                      const MPCRef& ref_k) -> VectorXd
@@ -205,6 +245,8 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         const int idx = std::min<int>(k, static_cast<int>(ref.hp.size()) - 1);
 
         // nominal expansion point (x0,u0)
+        // Track at reference speed with zero lateral error and
+        // steering chosen so that curvature ≈ delta/L.
         VectorXd x0 = VectorXd::Zero(nx);
         VectorXd u0 = VectorXd::Zero(nu);
 
@@ -215,6 +257,7 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         if (ACC_ENABLE) x0(id_d) = 0.0;            // gap
 
         // one-step view for reference fields at stage k
+        // (This wraps the horizon ref into a local ref_k used in f_dyn)
         MPCRef ref_k;
         ref_k.hp.resize(1);
         ref_k.hp[0] = ref.hp[idx];
@@ -232,24 +275,24 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
 
         const double eps = 1e-6;
 
-        // df/dx
+        // df/dx via forward finite differences on each state dimension
         for (int i = 0; i < nx; ++i) {
             VectorXd x_eps = x0; x_eps(i) += eps;
             const VectorXd f_eps = f_dyn(x_eps, u0, ref_k);
             A.col(i) = (f_eps - f0) / eps;
         }
 
-        // df/du
+        // df/du via forward finite differences on each input dimension
         for (int j = 0; j < nu; ++j) {
             VectorXd u_eps = u0; u_eps(j) += eps;
             const VectorXd f_eps = f_dyn(x0, u_eps, ref_k);
             B.col(j) = (f_eps - f0) / eps;
         }
 
-        // affine term c: f ≈ A(x-x0) + B(u-u0) + c  =>  c = f0 - A x0 - B u0
+        // affine term d: f ≈ A(x-x0) + B(u-u0) + d  =>  d = f0 - A x0 - B u0
         d = f0 - A * x0 - B * u0;
 
-        // ZOH discretization
+        // ZOH discretization of the local linear model
         MatrixXd Ad, Bd;
         VectorXd cd;
         discretizeZOH(A, B, d, P.dt, Ad, Bd, cd);
@@ -259,7 +302,7 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
         lm_.c[k] = cd;
     }
 
-    // ---- (optional) set nominal rollouts used elsewhere ----
+    // ---- set nominal rollouts used elsewhere (e.g. logging, warm-start) ----
     nom_.x.resize(N + 1);
     nom_.u.resize(N);
     for (int k = 0; k <= N; ++k) {
@@ -274,6 +317,9 @@ void LTV_MPC::buildLinearization(const MPCRef& ref) {
     }
 }
 
+// Corridor bounds on ey along horizon.
+// If corridor bounds are provided externally, store them; otherwise we will
+// fall back to symmetric |ey| <= P.ey_max in solveQP().
 void LTV_MPC::setCorridorBounds(const std::vector<double>& lo,
     const std::vector<double>& up) {
     const int N = P.N;
@@ -286,10 +332,23 @@ void LTV_MPC::setCorridorBounds(const std::vector<double>& lo,
 
 
 // ------------------------------------------------------------------
-// solveQP: assemble constraints/cost and solve (first input returned)
-// Uses triplet assembly (no sparse block assignment).
+// solveQP: assemble constraints/cost and solve the LTV-MPC QP.
+//
+// Decision vector z stacks:
+//   x_0..x_N (states), u_0..u_{N-1} (inputs), s_0..s_{N-1} (ACC slack)
+//
+// The QP is:
+//
+//   minimize  0.5 z^T H z + g^T z
+//   subject to
+//     equality constraints: dynamics + initial condition
+//     inequality constraints: corridors, input/state boxes,
+//                             lateral capacity guard, ACC constraints,
+//                             accel bounds.
+//
+// Returns the first control input [R, ddelta] as MPCControl.
 // ------------------------------------------------------------------
-MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VControl& u_prev, double ax_prev) {
+MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref) {
     using Eigen::VectorXd;
     using Eigen::SparseMatrix;
     using Eigen::Triplet;
@@ -312,16 +371,17 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VContro
     const int id_ddelta = 1;
 
     // stacked decision sizes
-    const int NX = (N + 1) * nx;
-    const int NU = N * nu;
-    const int Ns = ACC_ENABLE ? N : 0;
-    const int NZ = NX + NU + Ns;
+    const int NX = (N + 1) * nx;   // all states
+    const int NU = N * nu;         // all inputs
+    const int Ns = ACC_ENABLE ? N : 0;  // slacks for ACC constraints
+    const int NZ = NX + NU + Ns;   // total decision dimension
 
     ACCBoundCoeffs acc_coeffs;
 
+    // index helpers for block structure in decision vector z
     auto idx_x = [&](int k, int i) { return k * nx + i; };        // 0..NX-1
     auto idx_u = [&](int k, int j) { return NX + k * nu + j; };   // NX..NX+NU-1
-    auto idx_s = [&](int k)        { return NX + NU + k; };  
+    auto idx_s = [&](int k)        { return NX + NU + k; };       // start of slack region
 
     // -----------------------------
     // Corridor bounds for ey
@@ -329,6 +389,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VContro
     std::vector<double> ey_upper(N, +OSQP_INFTY);
     std::vector<double> ey_lower(N, -OSQP_INFTY);
 
+    // If we have externally-provided corridor, use it; otherwise fallback to |ey|<=P.ey_max.
     if (have_corridor_bounds_) {
         for (int k = 0; k < N; ++k) {
             double lo = (k < (int)ey_lo_provided_.size()) ? ey_lo_provided_[k] : -OSQP_INFTY;
@@ -349,31 +410,32 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VContro
     // COST: H (symmetric) and g
     // ============================
     std::vector<Triplet<double>> Ht;
-    Ht.reserve(NZ * 6);
+    Ht.reserve(NZ * 6);      // rough guess for nonzeros
     VectorXd g = VectorXd::Zero(NZ);
 
-    // stage costs
+    // stage costs for k = 0..N-1
     for (int k = 0; k < N; ++k) {
         const int idx = std::min<int>(k, (int)ref.hp.size() - 1);
         const double vref  = (idx >= 0) ? ref.hp[idx].v_ref : 0.0;
         const double eyref = (k < (int)ref.ey_ref.size()) ? ref.ey_ref[k] : 0.0;
 
-        // ey tracking
+        // ey tracking: P.wy * (ey_k - eyref_k)^2
         Ht.emplace_back(idx_x(k, id_ey), idx_x(k, id_ey), 2.0 * P.wy);
         g(idx_x(k, id_ey)) += -2.0 * P.wy * eyref;
 
-        // epsi^2
+        // heading error cost: P.wpsi * epsi_k^2
         Ht.emplace_back(idx_x(k, id_epsi), idx_x(k, id_epsi), 2.0 * P.wpsi);
 
-        // (vx - vref)^2
+        // speed tracking: P.wv * (vx_k - vref_k)^2
         Ht.emplace_back(idx_x(k, id_vx), idx_x(k, id_vx), 2.0 * P.wv);
         g(idx_x(k, id_vx)) += -2.0 * P.wv * vref;
 
-        // input penalties
+        // input penalties: P.wR*R_k^2 + P.wdd*ddelta_k^2
         Ht.emplace_back(idx_u(k, id_R), idx_u(k, 0), 2.0 * P.wR);
         Ht.emplace_back(idx_u(k, id_ddelta), idx_u(k, 1), 2.0 * P.wdd);
 
         // input slew (u_k - u_{k-1})^2
+        // penalizes changes in inputs to smooth behavior
         if (k > 0) {
             for (int j = 0; j < nu; ++j) {
                 const int uk   = idx_u(k, j);
@@ -386,34 +448,36 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VContro
             }
         }
 
+        // ACC slack cost: P.w_acc_slack * s_k^2
         if (ACC_ENABLE) {
             const int isk = idx_s(k);
             Ht.emplace_back(isk, isk, 2.0 * P.w_acc_slack);
         }
     }
 
-    // optional propulsion jerk: (R_k - 2R_{k-1} + R_{k-2})^2
-    if (P.wddR > 0.0) {
-        for (int kk = 2; kk < N; ++kk) {
-            const int Rk   = idx_u(kk, 0);
-            const int Rkm1 = idx_u(kk - 1, 0);
-            const int Rkm2 = idx_u(kk - 2, 0);
-            const double a = 1.0, b = -2.0, c = 1.0;
-            const double s = 2.0 * P.wddR;
-            Ht.emplace_back(Rk,   Rk,   s * a * a);
-            Ht.emplace_back(Rkm1, Rkm1, s * b * b);
-            Ht.emplace_back(Rkm2, Rkm2, s * c * c);
+    // propulsion jerk regularization:
+    //   (R_k - 2R_{k-1} + R_{k-2})^2
+    // used if P.wddR > 0 for smoother longitudinal control.
 
-            Ht.emplace_back(Rk,   Rkm1, s * a * b);
-            Ht.emplace_back(Rkm1, Rk,   s * a * b);
-            Ht.emplace_back(Rk,   Rkm2, s * a * c);
-            Ht.emplace_back(Rkm2, Rk,   s * a * c);
-            Ht.emplace_back(Rkm1, Rkm2, s * b * c);
-            Ht.emplace_back(Rkm2, Rkm1, s * b * c);
-        }
+    for (int kk = 2; kk < N; ++kk) {
+        const int Rk   = idx_u(kk, 0);
+        const int Rkm1 = idx_u(kk - 1, 0);
+        const int Rkm2 = idx_u(kk - 2, 0);
+        const double a = 1.0, b = -2.0, c = 1.0;
+        const double s = 2.0 * P.wddR;
+        Ht.emplace_back(Rk,   Rk,   s * a * a);
+        Ht.emplace_back(Rkm1, Rkm1, s * b * b);
+        Ht.emplace_back(Rkm2, Rkm2, s * c * c);
+
+        Ht.emplace_back(Rk,   Rkm1, s * a * b);
+        Ht.emplace_back(Rkm1, Rk,   s * a * b);
+        Ht.emplace_back(Rk,   Rkm2, s * a * c);
+        Ht.emplace_back(Rkm2, Rk,   s * a * c);
+        Ht.emplace_back(Rkm1, Rkm2, s * b * c);
+        Ht.emplace_back(Rkm2, Rkm1, s * b * c);
     }
 
-    // terminal costs
+    // terminal costs on ey_N and epsi_N
     Ht.emplace_back(idx_x(N, id_ey),   idx_x(N, id_ey),   2.0 * P.wyf);
     g(idx_x(N, id_ey))   += -2.0 * P.wyf * ref.ey_ref_N;
     Ht.emplace_back(idx_x(N, id_epsi), idx_x(N, id_epsi), 2.0 * P.wpsif);
@@ -424,33 +488,41 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VContro
     // ============================
     // EQUALITY: dynamics + x0
     // ============================
-    const int meq_rows = N * nx + nx;
+    // We enforce:
+    //   x_{k+1} = Ad_k x_k + Bd_k u_k + c_k  for k = 0..N-1
+    //   x_0 = x0 (initial condition)
+    const int meq_rows = N * nx + nx; // N*nx dynamics + nx initial-condition rows
     std::vector<Triplet<double>> Aeqt; Aeqt.reserve(meq_rows * (nx + nu));
     VectorXd beq = VectorXd::Zero(meq_rows);
 
     auto row_dyn = [&](int k, int i) { return k * nx + i; };   // 0 .. N*nx-1
-    auto row_x0  = [&](int i)       { return N * nx + i; };
+    auto row_x0  = [&](int i)       { return N * nx + i; };    // last nx rows
 
+    // Dynamics equality constraints
     for (int k = 0; k < N; ++k) {
         const auto& Ad = lm_.A[k];
         const auto& Bd = lm_.B[k];
         const auto& cd = lm_.c[k];
 
         for (int i = 0; i < nx; ++i) {
+            // x_{k+1} term
             Aeqt.emplace_back(row_dyn(k, i), idx_x(k + 1, i), 1.0);
+            // -Ad * x_k
             for (int j = 0; j < nx; ++j) {
                 const double v = -Ad(i, j);
                 if (v != 0.0) Aeqt.emplace_back(row_dyn(k, i), idx_x(k, j), v);
             }
+            // -Bd * u_k
             for (int j = 0; j < nu; ++j) {
                 const double v = -Bd(i, j);
                 if (v != 0.0) Aeqt.emplace_back(row_dyn(k, i), idx_u(k, j), v);
             }
+            // right-hand side: cd
             beq(row_dyn(k, i)) = cd(i);
         }
     }
 
-    // initial condition
+    // initial condition constraints: x_0 = x0 (for each state component)
     beq(row_x0(id_ey))     = x0.ey;     Aeqt.emplace_back(row_x0(id_ey),     idx_x(0, id_ey),     1.0);
     beq(row_x0(id_epsi))   = x0.epsi;   Aeqt.emplace_back(row_x0(id_epsi),   idx_x(0, id_epsi),   1.0);
     beq(row_x0(id_vx))     = x0.vx;     Aeqt.emplace_back(row_x0(id_vx),     idx_x(0, id_vx),     1.0);
@@ -459,105 +531,69 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VContro
     beq(row_x0(id_delta))  = x0.delta;  Aeqt.emplace_back(row_x0(id_delta),  idx_x(0, id_delta),  1.0);
     if (ACC_ENABLE) {
         beq(row_x0(id_d)) = x0.d;
-        // std::cout << "x0.d: " << x0.d << std::endl;
         Aeqt.emplace_back(row_x0(id_d), idx_x(0, id_d), 1.0);
     }
 
     // ============================
     // INEQUALITIES
     // ============================
+    // Inequalities are assembled as:
+    //   l_ineq <= A_ineq * z <= u_ineq
     std::vector<Triplet<double>> Aint;
     std::vector<double> lin_v, uin_v;
+
+    // helper to push a single-row constraint on (row, col) with 1 coeff
     auto push_row_le = [&](int row, int col, double coeff, double lo, double hi) {
         Aint.emplace_back(row, col, coeff);
         lin_v.push_back(lo);
         uin_v.push_back(hi);
     };
 
-    int row = 0;
+    int row = 0;  // inequality row counter
 
     // (1) ey corridor for k = 0..N-1
+    //     ey_lower[k] <= ey_k <= ey_upper[k]
     for (int k = 0; k < N; ++k) {
         if (ey_upper[k] < +OSQP_INFTY) {            // ey_k <= up
             push_row_le(row, idx_x(k, id_ey), +1.0, -OSQP_INFTY, ey_upper[k]);
             ++row;
         }
-        if (ey_lower[k] > -OSQP_INFTY) {            // -ey_k <= -lo
+        if (ey_lower[k] > -OSQP_INFTY) {            // -ey_k <= -lo  =>  ey_k >= lo
             push_row_le(row, idx_x(k, id_ey), -1.0, -OSQP_INFTY, -ey_lower[k]);
             ++row;
         }
     }
 
-    // (2) input boxes
+    // (2) input boxes for each stage:
+    //     R_min <= R_k <= R_max
+    //     -ddelta_max <= ddelta_k <= ddelta_max
     for (int k = 0; k < N; ++k) {
         push_row_le(row, idx_u(k, id_R), 1.0, lim_.R_min,        lim_.R_max);        ++row;  // R
         push_row_le(row, idx_u(k, id_ddelta), 1.0, -lim_.ddelta_max,  lim_.ddelta_max);   ++row;  // ddelta
     }
 
-    // // (2) Input boxes (Modified for Friction Circle Coupling)
-    // for (int k = 0; k < N; ++k) {
-    //     // ---------------------------------------------------------
-    //     // A. Dynamic Friction Circle Limit for R (Longitudinal Force)
-    //     // ---------------------------------------------------------
-    //     const int idx = std::min<int>(k, (int)ref.hp.size() - 1);
-        
-    //     // Use a minimum speed to avoid singular behavior at absolute 0
-    //     const double vref = std::max(1.0, (idx >= 0) ? ref.hp[idx].v_ref : 0.0);
-    //     const double kappa = std::abs(ref.hp[idx].kappa);
-
-    //     // 1. Estimate Lateral Force Demand: Fy = m * v^2 * kappa
-    //     // This predicts how much grip the turn will consume.
-    //     double Fy_demand = vp_.m * vref * vref * kappa;
-        
-    //     // 2. Define Max Total Grip: F_total = mu * m * g
-    //     // (Assume mu = 0.9 for dry road. In real app, this comes from an estimator)
-    //     double F_max_grip = 0.9 * vp_.m * 9.81;
-
-    //     // 3. Calculate Available Longitudinal Force
-    //     // Diamond Approximation: |Fx| + |Fy| <= F_total
-    //     // Therefore: |Fx| <= F_total - |Fy|
-    //     double Fx_available = std::max(100.0, F_max_grip - Fy_demand);
-        
-    //     // 4. Clamp to physical engine/brake limits
-    //     double R_upper = std::min(lim_.R_max, Fx_available);
-    //     double R_lower = std::max(lim_.R_min, -Fx_available);
-
-    //     // Apply dynamic bounds to R
-    //     push_row_le(row, idx_u(k, id_R), 1.0, R_lower, R_upper);        
-    //     ++row;  
-
-    //     // ---------------------------------------------------------
-    //     // B. Steering Rate Limits (ddelta)
-    //     // ---------------------------------------------------------
-    //     // (If you implemented the dynamic steering rate limit we discussed 
-    //     // earlier, put that calculation here. Otherwise, use static limits.)
-        
-    //     // Dynamic steering rate limit based on speed (Jerk limit ~0.9 m/s^3)
-    //     double ddelta_dyn = (vp_.L * 0.9) / (vref * vref);
-    //     ddelta_dyn = std::min(ddelta_dyn, lim_.ddelta_max);
-    //     ddelta_dyn = std::max(ddelta_dyn, 0.05); // Minimum steer capability
-
-    //     push_row_le(row, idx_u(k, id_ddelta), 1.0, -ddelta_dyn, ddelta_dyn);   
-    //     ++row;
-    // }
-
-    // (3) steering angle bounds
+    // (3) steering angle bounds for each x_k:
+    //     -delta_max <= delta_k <= delta_max
     for (int k = 0; k <= N; ++k) {
         push_row_le(row, idx_x(k, id_delta), 1.0, -lim_.delta_max, lim_.delta_max);
         ++row;
     }
 
-    // (4) speed bounds (optional)
+    // (4) speed bounds:
+    //     v_min <= vx_k <= v_max
     for (int k = 0; k <= N; ++k) {
         push_row_le(row, idx_x(k, id_vx), 1.0, P.v_min, P.v_max);
         ++row;
     }
 
-    // (5) simple lateral capacity guard using static axle loads + mu
+    // (5) simple lateral capacity guard using static axle loads + mu.
+    // This approximates |sum Fy| <= mu * Fz for combined front+rear axles
+    // and transforms it into a bound on steering delta_k using a crude
+    // cornering stiffness factor (v^2/L) style scaling.
     {
         const double g = 9.81;
-        const double Fzf0 = vp_.m * g * (vp_.L - vp_.d) / vp_.L + tp_.m_unsprung_front * g;  // front axle
-        const double Fzr0 = vp_.m * g * (vp_.d)        / vp_.L + tp_.m_unsprung_rear * g;    // rear axle
+        const double Fzf0 = vp_.m * g * (vp_.L - vp_.d) / vp_.L + tp_.m_unsprung_front * g;  // front axle static load
+        const double Fzr0 = vp_.m * g * (vp_.d)        / vp_.L + tp_.m_unsprung_rear * g;    // rear axle static load
         const double Fy_front_peak = 2.0 * (tp_.muf * Fzf0);
         const double Fy_rear_peak  = 2.0 * (tp_.mur * Fzr0);
         const double Fy_cap = Fy_front_peak + Fy_rear_peak;
@@ -574,7 +610,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VContro
             uin_v.push_back(Fy_cap);
             ++row;
 
-            // -coeff * delta_k <= Fy_cap
+            // -coeff * delta_k <= Fy_cap  =>  |coeff*delta_k| <= Fy_cap
             Aint.emplace_back(row, idx_x(k, id_delta), -coeff);
             lin_v.push_back(-OSQP_INFTY);
             uin_v.push_back(Fy_cap);
@@ -582,8 +618,12 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VContro
         }
     }
 
-    // (6) ACC: d >= 0 and time-headway constraint if lead present
+    // (6) ACC: d >= 0 and time-headway constraint if lead present.
+    // We model safety distance as:
+    //   d_k - tau * v_k + s_k >= dmin,    s_k >= 0
+    // The constraints are added only when ref.has_obj[k] is true.
     if (ACC_ENABLE) {
+        // non-negative spacing: d_k >= 0
         for (int k = 0; k <= N; ++k) {
             push_row_le(row, idx_x(k, id_d), 1.0, 0.0, +OSQP_INFTY);
             ++row;
@@ -613,7 +653,9 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VContro
         }
     }
 
-    // (7) acceleration bounds: amin <= (vx_{k+1} - vx_k)/dt <= amax
+    // (7) acceleration bounds:
+    //   amin(v) <= (vx_{k+1} - vx_k)/dt <= amax(v)
+    // Here the bounds depend on reference speed through ax_min/ax_max.
     for (int k = 0; k < N; ++k) {
         // decide what speed to use for limits (vref or some nominal):
         const int idx_ref = std::min<int>(k, (int)ref.hp.size() - 1);
@@ -640,139 +682,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VContro
         ++row;
     }
 
-    // // (8) Jerk bounds: -j_max <= (a_k - a_{k-1})/dt <= j_max
-    // // This ensures the change in acceleration is smooth (passenger comfort).
-    // // Units: Matrix output will be m/s^3 (Jerk).
-    
-    // const double jmax = 1.5;                 // Comfort limit: 1.5 m/s^3
-    // const double dt_sq_inv = 1.0 / (P.dt * P.dt); // 1 / dt^2
-
-    // // You need the vehicle's CURRENT acceleration for the first step (k=0).
-    // // If unknown, use 0.0, but it might cause a "kick" if you are already accelerating.
-    // const double a_init = ax_prev; // <--- REPLACE this with actual measurement if available!
-
-    // for (int k = 0; k < N; ++k) {
-    //     const int row_jerk = row;
-
-    //     const int col_vx_k1 = idx_x(k + 1, id_vx); // v_{k+1}
-    //     const int col_vx_k  = idx_x(k,     id_vx); // v_k
-
-    //     if (k == 0) {
-    //         // ---------------------------------------------------------
-    //         // Case k=0: Link First Step to Current State
-    //         // Formula: (a_0 - a_init) / dt <= jmax
-    //         // Matrix Part: (v_1 - v_0) / dt^2
-    //         // Constant Part (moved to bounds): - a_init / dt
-    //         // ---------------------------------------------------------
-            
-    //         // Matrix: (v_1 - v_0) / dt^2
-    //         Aint.emplace_back(row_jerk, col_vx_k1,  dt_sq_inv);
-    //         Aint.emplace_back(row_jerk, col_vx_k,  -dt_sq_inv);
-
-    //         // Bounds: -jmax <= Matrix - a_init/dt <= jmax
-    //         // Rearranged: -jmax + a_init/dt <= Matrix <= jmax + a_init/dt
-    //         double bound_offset = a_init / P.dt;
-
-    //         lin_v.push_back(-jmax + bound_offset);
-    //         uin_v.push_back( jmax + bound_offset);
-    //         ++row;
-    //     } 
-    //     else {
-    //         // ---------------------------------------------------------
-    //         // Case k>0: Link Step k to Step k-1
-    //         // Formula: (a_k - a_{k-1}) / dt <= jmax
-    //         // Expanded: ( (v_{k+1}-v_k)/dt - (v_k-v_{k-1})/dt ) / dt
-    //         // Matrix Part: (v_{k+1} - 2*v_k + v_{k-1}) / dt^2
-    //         // ---------------------------------------------------------
-    //         const int col_vx_km1 = idx_x(k - 1, id_vx); // v_{k-1}
-
-    //         // v_{k+1} * (1/dt^2)
-    //         Aint.emplace_back(row_jerk, col_vx_k1,   dt_sq_inv);
-    //         // v_k     * (-2/dt^2)
-    //         Aint.emplace_back(row_jerk, col_vx_k,   -2.0 * dt_sq_inv);
-    //         // v_{k-1} * (1/dt^2)
-    //         Aint.emplace_back(row_jerk, col_vx_km1,  dt_sq_inv);
-
-    //         lin_v.push_back(-jmax);
-    //         uin_v.push_back( jmax);
-    //         ++row;
-    //     }
-    // }
-
-    // // (9) Force Slew Rate Limit (Smooths out the Gas/Brake pedal)
-    // // Constraint: -dR_max <= R_k - R_{k-1} <= dR_max
-    // {
-    //     // Limit jerk to 2.0 m/s^3 for propulsion changes
-    //     // For a 1500kg car @ 0.05s dt, this is ~150 N per step
-    //     double max_jerk_force = 2.0; 
-    //     double max_delta_R = vp_.m * max_jerk_force * P.dt;
-
-    //     for (int k = 0; k < N; ++k) {
-    //         const int col_R_k = idx_u(k, id_R);
-            
-    //         // For k=0, constrain against the PREVIOUS ACTUAL command
-    //         if (k == 0) {
-    //             // You need to pass the last applied R (u_prev) to solveQP
-    //             // For now, use 0.0 or x0.ax * mass if u_prev is unavailable
-    //             double R_prev = u_prev.R;
-                
-    //             // R_0 - R_prev <= max_delta
-    //             Aint.emplace_back(row, col_R_k, 1.0);
-    //             lin_v.push_back(R_prev - max_delta_R);
-    //             uin_v.push_back(R_prev + max_delta_R);
-    //             ++row;
-    //         } 
-    //         else {
-    //             // R_k - R_{k-1} <= max_delta
-    //             const int col_R_km1 = idx_u(k - 1, id_R);
-                
-    //             Aint.emplace_back(row, col_R_k,    1.0);
-    //             Aint.emplace_back(row, col_R_km1, -1.0);
-    //             lin_v.push_back(-max_delta_R);
-    //             uin_v.push_back( max_delta_R);
-    //             ++row;
-    //         }
-    //     }
-    // }
-
-    // // (10) Steering Slew Rate Limit (Steering Acceleration)
-    // // Constraint: -d_ddelta_max <= ddelta_k - ddelta_{k-1} <= d_ddelta_max
-    // {
-    //     // Limit steering angular acceleration to 5.0 rad/s^2
-    //     // (Typical autonomous steering motors are 5-10 rad/s^2)
-    //     double max_steer_accel = 5.0; 
-    //     double max_d_ddelta = max_steer_accel * P.dt;
-
-    //     for (int k = 0; k < N; ++k) {
-    //         const int col_dd_k = idx_u(k, id_ddelta);
-            
-    //         // For k=0, constrain against previous ACTUAL steering rate
-    //         if (k == 0) {
-    //             // You need to pass the current steering rate from x0 or sensors
-    //             // Assuming x0 has 'd_delta' or similar. If not, use 0.0 or x0.delta - x_prev.delta
-    //             // Let's assume you add 'current_ddelta' to your inputs, or approximate with 0.
-    //             double dd_prev = u_prev.ddelta;
-                
-    //             // ddelta_0 - dd_prev <= max_delta
-    //             Aint.emplace_back(row, col_dd_k, 1.0);
-    //             lin_v.push_back(dd_prev - max_d_ddelta);
-    //             uin_v.push_back(dd_prev + max_d_ddelta);
-    //             ++row;
-    //         } 
-    //         else {
-    //             // ddelta_k - ddelta_{k-1} <= max_delta
-    //             const int col_dd_km1 = idx_u(k - 1, id_ddelta);
-                
-    //             Aint.emplace_back(row, col_dd_k,    1.0);
-    //             Aint.emplace_back(row, col_dd_km1, -1.0);
-    //             lin_v.push_back(-max_d_ddelta);
-    //             uin_v.push_back( max_d_ddelta);
-    //             ++row;
-    //         }
-    //     }
-    // }
-
-    // Stack equalities + inequalities
+    // Stack equalities + inequalities into one big A, l, u for OSQP.
     const int meq   = (int)beq.size();
     const int mineq = (int)lin_v.size();
     const int m     = meq + mineq;
@@ -786,8 +696,10 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VContro
     A.setFromTriplets(Atrips.begin(), Atrips.end());
 
     VectorXd l(m), u(m);
+    // equalities get l = u = beq
     l.head(meq) = beq;
     u.head(meq) = beq;
+    // inequalities get their own lower / upper bounds
     for (int i = 0; i < mineq; ++i) {
         l(meq + i) = lin_v[i];
         u(meq + i) = uin_v[i];
@@ -812,6 +724,7 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VContro
 
     if (solver.solveProblem() != OsqpEigen::ErrorExitFlag::NoError) return {};
 
+    // Extract first-step control from solution z.
     const VectorXd z = solver.getSolution();
     MPCControl out;
     out.R      = z(idx_u(0, id_R));

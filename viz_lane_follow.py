@@ -51,8 +51,13 @@ dv     = _need("dv")
 v_ref  = _need("v_ref")
 x_ref  = _need("x_ref")
 y_ref  = _need("y_ref")
-F_fl   = _need("Fy_f")
-F_rl   = _need("Fy_r")
+Fy_f   = _need("Fy_f")
+Fy_r   = _need("Fy_r")
+Fz_f   = _need("Fz_f")
+Fz_r   = _need("Fz_r")
+Mz     = _need("Mz")
+alpha_f = _need("alpha_f")
+alpha_r = _need("alpha_r")
 
 # Optional columns
 psi = df["psi"].values if "psi" in df.columns else None
@@ -178,78 +183,230 @@ ax1.set_xlabel("X [m]"); ax1.set_ylabel("Y [m]")
 ax1.legend(); ax1.grid(True)
 plt.tight_layout()
 
+# ======================================================================
+# Figure 2: Time Histories (9 subplots)
+#   0: e_y
+#   1: e_psi
+#   2: speed tracking
+#   3: propulsion command
+#   4: longitudinal & lateral acceleration
+#   5: yaw acceleration
+#   6: jerk
+#   7: steering rate cmd
+#   8: steering angle
+# ======================================================================
+fig2, axs2 = plt.subplots(3, 3, figsize=(12, 12))
+axs2 = axs2.ravel()
 
-# ---------- Figure 2: Other signals ----------
-fig2, axs = plt.subplots(3, 3, figsize=(12, 10))
-axs = axs.ravel()
+# 0) e_y
+axs2[0].plot(t, ey, label="e_y [m]")
+axs2[0].set_title("Lateral Error e_y")
+axs2[0].set_xlabel("Time [s]")
+axs2[0].set_ylabel("e_y [m]")
+axs2[0].legend()
+axs2[0].grid(True)
+
+# 1) e_psi
+axs2[1].plot(t, epsi, label="e_psi [rad]")
+axs2[1].set_title("Heading Error e_psi")
+axs2[1].set_xlabel("Time [s]")
+axs2[1].set_ylabel("e_psi [rad]")
+axs2[1].legend()
+axs2[1].grid(True)
 
 # 2) Speed tracking
-axs[0].plot(t, v_ref, label="v_ref")
-axs[0].plot(t, v, "--", label="v")
-axs[0].plot(t, v_lead, "--", label="v_lead")
-axs[0].set_title("Speed Tracking")
-axs[0].set_xlabel("Time [s]"); axs[0].set_ylabel("Speed [m/s]")
-axs[0].legend(); axs[0].grid(True)
+axs2[2].plot(t, v_ref, label="v_ref")
+axs2[2].plot(t, v, "--", label="v")
+if v_lead is not None:
+    axs2[2].plot(t, v_lead, "--", label="v_lead")
+axs2[2].set_title("Speed Tracking")
+axs2[2].set_xlabel("Time [s]")
+axs2[2].set_ylabel("Speed [m/s]")
+axs2[2].legend()
+axs2[2].grid(True)
 
-# 3) Errors
-axs[1].plot(t, ey, label="e_y [m]")
-axs[1].plot(t, epsi, "--", label="e_psi [rad]")
-axs[1].set_title("Tracking Errors")
-axs[1].set_xlabel("Time [s]"); axs[1].set_ylabel("Error")
-axs[1].legend(); axs[1].grid(True)
+# 3) Propulsion command
+axs2[3].plot(t, R_cmd)
+axs2[3].set_title("Propulsion Command")
+axs2[3].set_xlabel("Time [s]")
+axs2[3].set_ylabel("R [N]")
+axs2[3].grid(True)
 
-# 4) Acceleration
-axs[2].plot(t, R_cmd)
-axs[2].set_title("Propulsion Command")
-axs[2].set_xlabel("Time [s]"); axs[2].set_ylabel("R [N]")
-axs[2].grid(True)
+# 4) Longitudinal & lateral acceleration
+axs2[4].plot(t, ax, label="Longitudinal [m/s²]")
+axs2[4].plot(t, ay, label="Lateral [m/s²]")
+axs2[4].set_title("Acceleration (Longitudinal & Lateral)")
+axs2[4].set_xlabel("Time [s]")
+axs2[4].set_ylabel("Acceleration")
+axs2[4].legend()
+axs2[4].grid(True)
 
-# 5) Steering rate
-axs[3].plot(t, ddcmd)
-axs[3].set_title("Steering Rate Command")
-axs[3].set_xlabel("Time [s]"); axs[3].set_ylabel("d(delta)/dt [rad/s]")
-axs[3].grid(True)
+# 5) Yaw acceleration
+axs2[5].plot(t, ddpsi, label="Yaw accel [rad/s²]")
+axs2[5].set_title("Yaw Acceleration")
+axs2[5].set_xlabel("Time [s]")
+axs2[5].set_ylabel("ddpsi [rad/s²]")
+axs2[5].legend()
+axs2[5].grid(True)
 
-# 6) Steering angle
-axs[4].plot(t, delta)
-axs[4].set_title("Steering Angle")
-axs[4].set_xlabel("Time [s]"); axs[4].set_ylabel("delta [rad]")
-axs[4].grid(True)
+# 6) Jerk
+axs2[6].plot(t[2:], jerk[2:], label="Jerk [m/s³]")
+axs2[6].set_title("Jerk")
+axs2[6].set_xlabel("Time [s]")
+axs2[6].set_ylabel("Jerk [m/s³]")
+axs2[6].legend()
+axs2[6].grid(True)
 
-# 7) Minimum distance to obstacles
-if 'dmin' in locals() and dmin is not None:
-    dmin_arr = np.asarray(dmin, dtype=float)
-    good = np.isfinite(dmin_arr)
-    axs[5].set_title("Minimum distance to...")
-    if good.any():
-        axs[5].plot(t[good], dmin_arr[good], label="obstacles")
-        axs[5].set_xlabel("Time [s]"); axs[5].set_ylabel("d_min [m]")
-        axs[5].grid(True)
-    if 'd_gap' in locals() and d_gap is not None:
-        axs[5].plot(t, d_gap, label="lead vehicle")
-        axs[5].legend()
+# 7) Steering rate command
+axs2[7].plot(t, ddcmd)
+axs2[7].set_title("Steering Rate Command")
+axs2[7].set_xlabel("Time [s]")
+axs2[7].set_ylabel("d(delta)/dt [rad/s]")
+axs2[7].grid(True)
 
-# 8) Force at tires
-axs[6].plot(t, F_fl, label="Lateral force at front")
-axs[6].plot(t, F_rl, label="Lateral force at rear")
-axs[6].set_title("Tire force")
-axs[6].set_xlabel("Time [s]"); axs[6].set_ylabel("Tire force [N]")
-axs[6].legend()
-axs[6].grid(True)
-
-# 9) Acceleration
-axs[7].plot(t, ax, label="Longitudinal acceleration [m/s^2]")
-axs[7].plot(t, ay, label="Lateral acceleration [m/s^2]")
-axs[7].plot(t, ddpsi, "--", label="Yaw acceleration [rad/s^2]")
-axs[7].set_title("Acceleration")
-axs[7].set_xlabel("Time [s]"); axs[7].set_ylabel("Acceleration")
-axs[7].legend(); axs[7].grid(True)
-
-# 10) Jerk
-axs[8].plot(t[2:], jerk[2:], label="Jerk [m/s^3]")
-axs[8].set_title("Jerk")
-axs[8].set_xlabel("Time [s]"); axs[8].set_ylabel("Jerk [m/s³]")
-axs[8].legend(); axs[8].grid(True)
+# 8) Steering angle
+axs2[8].plot(t, delta)
+axs2[8].set_title("Steering Angle")
+axs2[8].set_xlabel("Time [s]")
+axs2[8].set_ylabel("delta [rad]")
+axs2[8].grid(True)
 
 plt.tight_layout()
+
+# ======================================================================
+# Figure 3: Tire Forces & ACC / Safety
+#   0: Fy_f & Fy_r
+#   1: Fz_f & Fz_r
+#   2: Mz
+#   3: dmin / gap
+# ======================================================================
+fig3, axs3 = plt.subplots(2, 2, figsize=(12, 8))
+axs3 = axs3.ravel()
+
+# 0) Lateral tire forces
+axs3[0].plot(t, Fy_f, label="Fy_front")
+axs3[0].plot(t, Fy_r, label="Fy_rear")
+axs3[0].set_title("Lateral Tire Forces")
+axs3[0].set_xlabel("Time [s]")
+axs3[0].set_ylabel("Fy [N]")
+axs3[0].legend()
+axs3[0].grid(True)
+
+# 1) Normal loads
+axs3[1].plot(t, Fz_f, label="Fz_front")
+axs3[1].plot(t, Fz_r, label="Fz_rear")
+axs3[1].set_title("Normal Loads")
+axs3[1].set_xlabel("Time [s]")
+axs3[1].set_ylabel("Fz [N]")
+axs3[1].legend()
+axs3[1].grid(True)
+
+# 2) Yaw moment
+axs3[2].plot(t, Mz)
+axs3[2].set_title("Yaw Moment Mz")
+axs3[2].set_xlabel("Time [s]")
+axs3[2].set_ylabel("Mz [Nm]")
+axs3[2].grid(True)
+
+# 3) Minimum distance / ACC gap
+if dmin is not None or d_gap is not None:
+    if dmin is not None:
+        dmin_arr = np.asarray(dmin, dtype=float)
+        good = np.isfinite(dmin_arr)
+        if good.any():
+            axs3[3].plot(t[good], dmin_arr[good], label="d_min to obstacles")
+    if d_gap is not None:
+        axs3[3].plot(t, d_gap, label="ACC gap to lead")
+    axs3[3].set_title("Minimum Distance / ACC Gap")
+    axs3[3].set_xlabel("Time [s]")
+    axs3[3].set_ylabel("Distance [m]")
+    axs3[3].legend()
+    axs3[3].grid(True)
+else:
+    axs3[3].set_visible(False)  # nothing to show
+
+plt.tight_layout()
+
+# ======================================================================
+# Figure 4: Tire Behavior / Handling Analysis (5 subplots)
+#   0: Fy_f vs alpha_f & Fy_r vs alpha_r
+#   1: Fy_norm vs slip angle (front/rear)
+#   2: Mz vs lateral acceleration ay
+#   3: (alpha_f - alpha_r) vs ay   <-- understeer gradient trend
+#   4: Fy vs Fz (load sensitivity)
+#   5: Friction circle Fx vs Fy (front+rear)
+# ======================================================================
+
+fig4, axs4 = plt.subplots(3, 2, figsize=(12, 14))
+axs4 = axs4.ravel()
+
+# ---------------------------------------------------
+# 0) Fy vs slip angle
+axs4[0].plot(alpha_f, Fy_f, ".", markersize=2, label="Front Fy vs α_f")
+axs4[0].plot(alpha_r, Fy_r, ".", markersize=2, label="Rear Fy vs α_r")
+axs4[0].set_title("Fy vs Slip Angle")
+axs4[0].set_xlabel("Slip angle α [rad]")
+axs4[0].set_ylabel("Fy [N]")
+axs4[0].legend(); axs4[0].grid(True)
+
+# ---------------------------------------------------
+# 1) Normalized Fy vs slip angle
+# --- You may define mu_f, mu_r here (assuming constant for visualization) ---
+mu_f = 0.9
+mu_r = 0.9
+
+# Avoid zero-div
+Fz_f_safe = np.maximum(Fz_f, 1e-3)
+Fz_r_safe = np.maximum(Fz_r, 1e-3)
+
+Fy_f_norm = Fy_f / (mu_f * Fz_f_safe)
+Fy_r_norm = Fy_r / (mu_r * Fz_r_safe)
+
+axs4[1].plot(alpha_f, Fy_f_norm, ".", markersize=2, label="Front Fy_norm")
+axs4[1].plot(alpha_r, Fy_r_norm, ".", markersize=2, label="Rear  Fy_norm")
+axs4[1].axhline(1.0, color="r", linestyle="--", alpha=0.7)   # Saturation limit
+axs4[1].axhline(-1.0, color="r", linestyle="--", alpha=0.7)
+axs4[1].set_title("Normalized Lateral Force Fy / (μFz)")
+axs4[1].set_xlabel("Slip angle α [rad]")
+axs4[1].set_ylabel("Normalized Fy")
+axs4[1].legend(); axs4[1].grid(True)
+
+# ---------------------------------------------------
+# 2) Mz vs lateral acceleration (stability trend)
+axs4[2].plot(ay, Mz, ".", markersize=2)
+axs4[2].set_title("Yaw Moment vs Lateral Acceleration")
+axs4[2].set_xlabel("ay [m/s²]")
+axs4[2].set_ylabel("Mz [Nm]")
+axs4[2].grid(True)
+
+# ---------------------------------------------------
+# 3) Understeer indicator: (alpha_f - alpha_r) vs ay
+alpha_diff = alpha_f - alpha_r
+axs4[3].plot(ay, alpha_diff, ".", markersize=2)
+axs4[3].set_title("Understeer Indicator: (α_f - α_r) vs ay")
+axs4[3].set_xlabel("ay [m/s²]")
+axs4[3].set_ylabel("α_f - α_r [rad]")
+axs4[3].grid(True)
+
+# ---------------------------------------------------
+# 4) Load sensitivity: Fy vs Fz
+axs4[4].plot(Fz_f, Fy_f, ".", markersize=2, label="Front")
+axs4[4].plot(Fz_r, Fy_r, ".", markersize=2, label="Rear")
+axs4[4].set_title("Load Sensitivity: Fy vs Fz")
+axs4[4].set_xlabel("Fz [N]")
+axs4[4].set_ylabel("Fy [N]")
+axs4[4].legend(); axs4[4].grid(True)
+
+# ---------------------------------------------------
+# 5) Friction circle (Fx vs Fy)
+axs4[5].plot(R_cmd, Fy_f, ".", markersize=2, label="Front")
+axs4[5].plot(R_cmd, Fy_r, ".", markersize=2, label="Rear")
+axs4[5].set_title("Friction Circle (Fx vs Fy)")
+axs4[5].set_xlabel("Fx [N]")
+axs4[5].set_ylabel("Fy [N]")
+axs4[5].legend(); axs4[5].grid(True)
+
+plt.tight_layout()
+plt.show()
+
 plt.show()

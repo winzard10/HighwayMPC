@@ -3,6 +3,12 @@
 This project implements a **lane-following highway controller** using **Linear Time-Varying MPC (LTV-MPC)** in C++, with visualization in Python.  
 The workflow is: **build → run simulations → visualize results**.
 
+ROB 590 Directed Study
+A study on controls commercial autonomous cars for passengers
+by Phurithat Tangsripairoje
+
+Supervised by Prof. Tulga Ersal
+
 ---
 
 ## Quick Commands
@@ -19,8 +25,8 @@ cmake --build build -j
 
 # Visualize results
 python3 viz_lane_follow.py
-python3 viz_lane_follow.py sim_log.csv --circle-at dmin
 
+# Useful copy and paste command
 cd build
 cmake ..
 make

@@ -1,3 +1,7 @@
+/// ------------------------------------------ ///
+/// Centerline Map Header (centerline_map.hpp) ///
+/// ------------------------------------------ ///
+
 #pragma once
 #include <string>
 #include <vector>
@@ -5,7 +9,10 @@
 
 /**
  * CenterlineMap parses and interpolates a highway two-lane CSV:
- *   s,x_right,y_right,x_left,y_left,psi_center,kappa_center,v_ref
+ *   s,x_right,y_right,x_left,y_left,psi_center,kappa_center,v_ref,
+ *   x_center,y_center,lane_width,
+ *   x_left_border,y_left_border,x_right_border,y_right_border
+ *
  * Coordinates: x forward (≈ arclength s in this synthetic map), y left.
  * Units: meters, radians, 1/m, m/s.
  *
@@ -31,9 +38,8 @@ public:
         double v_ref{};
         double x_center{}, y_center{};
         double lane_width{};
-        double x_left_border{}, y_left_border{};
+        double x_left_border{},  y_left_border{};
         double x_right_border{}, y_right_border{};
-
     };
 
     // Pose sampled on a lane centerline
@@ -89,19 +95,20 @@ public:
 
 private:
     // CSV columns
-    std::vector<double> s_;
-    std::vector<double> xr_, yr_;   // right-lane centerline
-    std::vector<double> xl_, yl_;   // left-lane centerline
-    std::vector<double> psi_;       // road tangent (shared across lanes)
-    std::vector<double> kappa_;
-    std::vector<double> vref_;
+    std::vector<double> s_;       // arclength / station
+    std::vector<double> xr_, yr_; // right-lane centerline
+    std::vector<double> xl_, yl_; // left-lane centerline
+    std::vector<double> psi_;     // road tangent (shared across lanes)
+    std::vector<double> kappa_;   // curvature at centerline
+    std::vector<double> vref_;    // reference speed profile
 
-    std::vector<double> xc_;
-    std::vector<double> yc_;
-    std::vector<double> lane_width_;
-    std::vector<double> xl_border_, yl_border_;
-    std::vector<double> xr_border_, yr_border_;
+    std::vector<double> xc_;      // midline x
+    std::vector<double> yc_;      // midline y
+    std::vector<double> lane_width_; // lane width (per lane or combined, depending on map)
+    std::vector<double> xl_border_, yl_border_; // left road border
+    std::vector<double> xr_border_, yr_border_; // right road border
 
     // utilities
-    std::size_t upper_index(double s) const; // find j with s_[j-1] <= s < s_[j]
+    // Find j with s_[j-1] <= s < s_[j] (using upper_bound)
+    std::size_t upper_index(double s) const;
 };

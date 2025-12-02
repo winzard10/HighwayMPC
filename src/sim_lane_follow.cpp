@@ -1,3 +1,7 @@
+/// ------------------------------------- ///
+/// Main Simulation (sim_lane_follow.cpp) ///
+/// ------------------------------------- ///
+
 #include "centerline_map.hpp"
 #include "mpc_ltv.hpp"
 #include "obstacles.hpp"
@@ -29,16 +33,17 @@ using TTire    = dynamics::tire::TireParams;
 namespace fs = std::filesystem;
 
 // ---------- CLI options ----------
+// Simple container for command-line configuration of a simulation run.
 struct CLI {
-  CenterlineMap::LaneRef lane_from{CenterlineMap::LaneRef::Right};
-  CenterlineMap::LaneRef lane_to  {CenterlineMap::LaneRef::Right};
-  double t_change{1e18};     // default: no lane change
-  double T_change{3.0};
+  CenterlineMap::LaneRef lane_from{CenterlineMap::LaneRef::Right};  // start lane
+  CenterlineMap::LaneRef lane_to  {CenterlineMap::LaneRef::Right};  // target lane
+  double t_change{1e18};     // time at which lane change starts (default: never)
+  double T_change{3.0};      // lane-change duration [s]
   std::string map_file{"data/lane_centerlines.csv"};
   std::string obs_file_primary{"data/obstacles.csv"};
   std::string obs_file_fallback{"data/obstacles_example.csv"};
   std::string log_file{"sim_log.csv"};
-  double T{180.0};
+  double T{180.0};           // total simulation time [s]
 };
 
 // ---------- Small math & utils ----------
@@ -46,6 +51,8 @@ static inline double clamp(double u, double lo, double hi) {
   return std::min(std::max(u, lo), hi);
 }
 
+// Smoothed step from 0→1 with zero slope at endpoints.
+// Used for smooth lane-change blending.
 static inline double smoothstep01(double u) {
   // 3u^2 - 2u^3, clamped to [0,1]
   if (u <= 0.0) return 0.0;
@@ -53,12 +60,14 @@ static inline double smoothstep01(double u) {
   return u * u * (3.0 - 2.0 * u);
 }
 
+// Wrap angle to (-pi, pi].
 static inline double wrapAngle(double a) {
   while (a >  M_PI) a -= 2.0 * M_PI;
   while (a <=-M_PI) a += 2.0 * M_PI;
   return a;
 }
 
+// Parse lane string ("right","left","center") into LaneRef enum.
 static inline CenterlineMap::LaneRef parseLane(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(), ::tolower);
   if (s == "right") return CenterlineMap::LaneRef::Right;
@@ -67,18 +76,21 @@ static inline CenterlineMap::LaneRef parseLane(std::string s) {
 }
 
 // ---------- Vehicle model (dynamic bicycle + pure lateral slip) ----------
+// Thin wrapper to use the shared dynamic vehicle step implementation.
 static VState stepVehicle(const VState& s, const VControl& u,
   const VParams& vp, const VLimits& lim,
   const TTire& tp) {
-return dynamics::vehicle::step(s, u, vp, lim, tp);
+  return dynamics::vehicle::step(s, u, vp, lim, tp);
 }
 
 
 // ---------- Lane pose helpers ----------
+// Local lane pose used within this file
 struct LanePose {
   double x{0}, y{0}, psi{0}, kappa{0}, v_ref{0}, lane_width{3.7};
 };
 
+// Sample pose on a selected lane (Right / Left / Center) at arclength s.
 static inline LanePose lanePoseAt(const CenterlineMap& map, double s,
                                   CenterlineMap::LaneRef which) {
   if (which == CenterlineMap::LaneRef::Right) {
@@ -89,14 +101,16 @@ static inline LanePose lanePoseAt(const CenterlineMap& map, double s,
   auto c = map.center_at(s);       return {c.x, c.y, c.psi, c.kappa, c.v_ref, c.lane_width};
 }
 
-// Compute lateral offset (ey) of a point (x,y) from the centerline
+// Compute lateral offset of world point (x,y) from a lane centerline
+// (using centerline heading & normal to define signed ey).
 double lateralOffsetFromCenterline(const CenterlineMap& map, double x, double y, CenterlineMap::LaneRef which) {
-  // Project obstacle position onto centerline
-  auto proj = map.project(x, y);    // expects .s_proj, .x_ref, .y_ref, .psi, etc.
+  // Project obstacle position onto centerline midline
+  auto proj = map.project(x, y);    // provides s_proj and reference pose
 
+  // Sample the lane pose at the same s for the requested lane
   LanePose cref = lanePoseAt(map, proj.s_proj, which);
 
-  // Normal vector to centerline heading (left-positive)
+  // Normal vector to lane heading (left-positive)
   const double nx = -std::sin(cref.psi);
   const double ny =  std::cos(cref.psi);
 
@@ -106,6 +120,7 @@ double lateralOffsetFromCenterline(const CenterlineMap& map, double x, double y,
 }
 
 // ---------- CLI parsing ----------
+// Parse simple command-line options into CLI struct.
 static void parseCLI(int argc, char** argv, CLI& cli) {
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -131,7 +146,8 @@ static void parseCLI(int argc, char** argv, CLI& cli) {
   }
 }
 
-// For logging: recompute axle lateral forces at the *current* state and inputs
+// For logging: re-compute lateral forces on front/rear axles in body frame
+// using the tire model and current state/inputs.
 static inline std::pair<double,double>
 compute_tire_forces(const VState& s, double delta, double R,
                     const VParams& vp, const TTire& tp)
@@ -160,6 +176,7 @@ int main(int argc, char** argv) {
 
   // --- Obstacles (optional) ---
   Obstacles obstacles;
+  // Prefer primary obstacle file, fall back to example if needed.
   std::string obs_file = fs::exists(cli.obs_file_primary)
                          ? cli.obs_file_primary
                          : (fs::exists(cli.obs_file_fallback) ? cli.obs_file_fallback : "");
@@ -175,28 +192,31 @@ int main(int argc, char** argv) {
   }
 
   // --- Vehicle & MPC ---
-  VParams  vp;        // has m, L, d, JG, dt, track_w, etc.
-  VLimits  lim;       // delta_max, ddelta_max, R_min/max, etc.
-  VState   st;
-  MPCParams mpcp; mpcp.dt = vp.dt;
+  VParams  vp;        // vehicle parameters: mass, wheelbase, cg offset, inertia, dt, track, etc.
+  VLimits  lim;       // actuator and force limits
+  VState   st;        // current vehicle state
+  MPCParams mpcp; mpcp.dt = vp.dt;      // MPC horizon config with dt from vehicle model
+
+  // Initialize ACC module (global state inside acc.cpp)
   acc::reset_defaults();
   acc::Params accp = acc::Params{};
-  acc::reset_gap(accp);          // sets internal gap to accp.d_init
+  acc::reset_gap(accp);          // sets internal global gap to accp.d_init
 
+  // Create LTV MPC controller and wire parameters/limits/ACC.
   LTV_MPC mpc(mpcp);
   mpc.setVehicleParams(vp);
   mpc.setLimits(lim);
-  mpc.setACCParams(accp);        // controller now reads accp.enable internally
+  mpc.setACCParams(accp);        // controller uses accp.enable/tau/dmin internally
 
-  // NOTE: No tire params set here.
-  //       MPC and plant will read from dynamics::tire::current().
+  // NOTE: No explicit tire params set here.
+  //       MPC and plant will both read dynamics::tire::current() as the default.
 
   // Initialize vehicle pose on chosen starting lane at s_min
   st.s = map.s_min();
   {
     LanePose p0 = lanePoseAt(map, st.s, cli.lane_from);
-    st.x = p0.x; st.y = p0.y; st.psi = p0.psi;
-    st.vx = 25.0;
+    st.x = p0.x; st.y = p0.y; st.psi = p0.psi; // on lane from
+    st.vx = 25.0;                              // initial speed [m/s]
     st.vy = 0.0;
     st.dpsi = 0.0;
     st.delta = 0.0;
@@ -209,26 +229,31 @@ int main(int argc, char** argv) {
     return 1;
   }
   log << std::fixed << std::setprecision(6);
+  // CSV header for post-processing (MATLAB/Python etc.)
   log << "t,s,x,y,psi,vx,vy,dpsi,delta,ax,ay,ddpsi,jerk,R_cmd,ddelta_cmd,ey,epsi,dv,"
-         "v_ref,x_ref,y_ref,psi_ref,alpha,dmin,v_lead,d_gap,Fy_f,Fy_r\n";
+         "v_ref,x_ref,y_ref,psi_ref,alpha,dmin,v_lead,d_gap,Fy_f,Fy_r,Fz_f,Fz_r,Mz,alpha_f,alpha_r\n";
 
-  // --- Simulation loop ---
+  // --- Simulation loop setup ---
   const int steps = static_cast<int>(cli.T / vp.dt);
-  std::vector<VControl>  u_mpc_h(steps); // log of MPC commands
-  std::vector<double>    ax_h(steps);    // log of accelerations
+  std::vector<VControl>  u_mpc_h(steps); // history of MPC commands (for analysis)
+  std::vector<double>    ax_h(steps);    // history of longitudinal acceleration
 
+  // Main time-stepping loop
   for (int k = 0; k <= steps; ++k) {
     const double t = k * vp.dt;
 
-    // Project current pose to centerline
+    // Project current pose to map centerline (for Frenet s/ey)
     auto projC = map.project(st.x, st.y);
     auto cref  = map.center_at(projC.s_proj);
 
-    // Lane-change blend for target XY
+    // Lane-change blend factor alpha ∈ [0,1] over [t_change, t_change+T_change]
     const double alpha = smoothstep01((t - cli.t_change) / cli.T_change);
+
+    // Get lane poses for from-lane and to-lane at same s
     LanePose fromP = lanePoseAt(map, projC.s_proj, cli.lane_from);
     LanePose toP   = lanePoseAt(map, projC.s_proj, cli.lane_to);
 
+    // Blend yaw in a wrap-safe way (shortest angle difference)
     auto blendYaw = [](double psi1, double psi2, double a) {
       const double d = std::atan2(std::sin(psi2 - psi1), std::cos(psi2 - psi1));
       return psi1 + a * d;
@@ -238,27 +263,30 @@ int main(int argc, char** argv) {
     const double x_ref   = (1.0 - alpha) * fromP.x + alpha * toP.x;
     const double y_ref   = (1.0 - alpha) * fromP.y + alpha * toP.y;
 
-    // Frenet errors
+    // Frenet-style lateral and heading errors w.r.t. blended lane reference
     const double nx = -std::sin(psi_ref);
     const double ny =  std::cos(psi_ref);
     const double ey   = (st.x - x_ref) * nx + (st.y - y_ref) * ny;
     const double epsi = wrapAngle(st.psi - psi_ref);
-    // const double dv   = st.vx - cref.v_ref;
+    // const double dv   = st.vx - cref.v_ref;  // (not used directly here)
 
-    // --- MPC preview (reference horizon & corridor frames) ---
+    // --- MPC preview horizon (ref.hp and corridor frames) ---
     MPCRef pref; pref.hp.resize(mpcp.N);
-    std::vector<Eigen::Vector2d>              p_ref_h(mpcp.N);
-    std::vector<double>                       psi_ref_h(mpcp.N);
-    std::vector<double>                       s_grid(mpcp.N);
-    std::vector<CenterlineMap::LaneRef>       lane_ref_h(mpcp.N);
-    std::vector<double>                       lane_w_h(mpcp.N);
+    std::vector<Eigen::Vector2d>              p_ref_h(mpcp.N);   // reference world points per step
+    std::vector<double>                       psi_ref_h(mpcp.N); // reference yaw per step
+    std::vector<double>                       s_grid(mpcp.N);    // arclength samples
+    std::vector<CenterlineMap::LaneRef>       lane_ref_h(mpcp.N);// lane choice per step (for corridor)
+    std::vector<double>                       lane_w_h(mpcp.N);  // lane width per step
 
-    double s_h = projC.s_proj;
-    double t_h = t;
+    double s_h = projC.s_proj; // horizon arclength start
+    double t_h = t;            // horizon time start
 
     for (int i = 0; i < mpcp.N; ++i) {
       s_grid[i] = s_h;
 
+      // For corridor: choose lane reference along horizon time.
+      // Here it's hard-coded: before t_change → Right,
+      // after t_change+T_change → Left, otherwise Center.
       CenterlineMap::LaneRef which;
       if (t_h < cli.t_change) which = CenterlineMap::LaneRef::Right;
       else if (t_h > cli.t_change + cli.T_change) which = CenterlineMap::LaneRef::Left;
@@ -266,28 +294,30 @@ int main(int argc, char** argv) {
 
       LanePose c = lanePoseAt(map, s_h, which);
 
-      // MPC preview
+      // Populate MPC preview of curvature & v_ref
       pref.hp[i].kappa = c.kappa;
       pref.hp[i].v_ref = c.v_ref;
 
-      // corridor metadata
+      // Corridor metadata
       p_ref_h[i]   = {c.x, c.y};
       psi_ref_h[i] = c.psi;
       lane_ref_h[i]= which;
       lane_w_h[i]  = std::max(0.1, c.lane_width);
 
-      // propagate obstacles' ey in this lane frame (if any active)
+      // For each active obstacle at THIS time t, compute its lateral offset
+      // in the lane frame and store in ey_obs (used by corridor planner).
       for (const auto &a : obstacles.active_at(t)) {
         double ey_o = lateralOffsetFromCenterline(map, a.x, a.y, which);
         obstacles.items[a.idx].ey_obs = ey_o;
       }
 
-      // advance along centerline with v_ref
+      // Advance horizon arclength using v_ref (simple forward Euler)
       const double v_step = std::max(1e-3, c.v_ref);
       s_h = std::min(s_h + v_step * mpcp.dt, map.s_max());
       t_h += mpcp.dt;
     }
 
+    // Initialize lane-wise lateral corridor bounds before obstacle shaping.
     std::vector<double> lo(mpcp.N), up(mpcp.N);
     for (int i = 0; i < mpcp.N; ++i) {
       const double w = lane_w_h[i];
@@ -298,7 +328,7 @@ int main(int argc, char** argv) {
       }
     }
 
-    // Current state in Frenet error coordinates
+    // Current ego state in the MPC's Frenet-like coordinates
     MPCState xk;
     xk.ey    = ey;
     xk.epsi  = epsi;
@@ -306,13 +336,13 @@ int main(int argc, char** argv) {
     xk.vy    = st.vy;
     xk.dpsi  = st.dpsi;
     xk.delta = st.delta;
-    if (accp.enable) xk.d = acc::gap();
+    if (accp.enable) xk.d = acc::gap();  // ACC gap state
 
-    // --- Corridor planning ---
+    // --- Corridor planning (obstacles → lateral bounds) ---
     const double t0     = t;
-    const double margin = 0.1;
-    const double L_look = 70.0;
-    const double slope  = 0.25;
+    const double margin = 0.1;  // safety margin around obstacles
+    const double L_look = 70.0; // forward look-ahead distance for obstacles
+    const double slope  = 0.25; // temporal smoothing slope for bounds
 
     corridor::buildRawBounds(
         p_ref_h, psi_ref_h, lane_w_h, lane_ref_h,
@@ -320,6 +350,7 @@ int main(int argc, char** argv) {
 
     corridor::Output cor = corridor::planGraph(s_grid, lo, up, slope);
 
+    // Fill MPC lateral reference from the planned corridor centerline.
     pref.ey_ref.resize(mpcp.N + 1);
     for (int i = 0; i < mpcp.N; ++i) pref.ey_ref[i] = cor.ey_ref[i];
     pref.ey_ref.back() = pref.ey_ref[mpcp.N - 1];
@@ -327,27 +358,28 @@ int main(int argc, char** argv) {
 
     mpc.setCorridorBounds(cor.lo, cor.up);
 
-    // --- Synthetic lead profile for ACC ---
+    // --- Synthetic lead profile for ACC preview ---
     if (accp.enable) {
       pref.v_obj.resize(mpcp.N);
       pref.has_obj.resize(mpcp.N);
       acc::fill_preview(pref, t, mpcp.dt, mpcp.N);
-      xk.d = acc::gap();
+      xk.d = acc::gap();  // keep state consistent
     } else {
       pref.v_obj.clear();
       pref.has_obj.clear();
     }
 
     // --- Solve MPC ---
-    VControl u_mpc_prev;
     double ax_prev;
-    if (k > 0) {u_mpc_prev = u_mpc_h[k - 1]; ax_prev = ax_h[k - 1];}
-    else       {u_mpc_prev = VControl{0.0, 0.0};   ax_prev = 0.0;      }
+    if (k > 0) { ax_prev = ax_h[k - 1]; }
+    else       { ax_prev = 0.0;         }
 
-    MPCControl u_mpc = mpc.solve(xk, pref, u_mpc_prev, ax_prev);
+    // Note: wrapper solve(...) also builds linearization internally.
+    // (Signature currently: solve(const MPCState&, const MPCRef&, const VControl&, double))
+    MPCControl u_mpc = mpc.solve(xk, pref);
     if (!u_mpc.ok) { u_mpc.R = 0.0; u_mpc.ddelta = 0.0; }
 
-    // --- Measure min distance to active obstacles (for logging) ---
+    // --- Measure minimum distance to active obstacles (for logging) ---
     double dmin = std::numeric_limits<double>::infinity();
     for (const auto& a : obstacles.active_at(t)) {
       const double dx = st.x - a.x;
@@ -357,20 +389,20 @@ int main(int argc, char** argv) {
     }
     if (!std::isfinite(dmin)) dmin = std::numeric_limits<double>::quiet_NaN();
 
-    // --- Advance vehicle dynamics ---
+    // --- Apply control and advance high-fidelity vehicle model ---
     const double R_cmd      = clamp(u_mpc.R,      lim.R_min, lim.R_max);
     const double ddelta_cmd = clamp(u_mpc.ddelta, -lim.ddelta_max, lim.ddelta_max);
     const VControl u_cmd{R_cmd, ddelta_cmd};
     u_mpc_h[k] = u_cmd;
-    ax_h[k]    = st.ax;
+    ax_h[k]    = st.ax;  // log current ax (for jerk computation next step)
 
-    // advance plant with tire-slip dynamics using the same centralized params
+    // Advance plant with dynamic bicycle + tire slip
     st = stepVehicle(st, u_cmd, vp, lim, dynamics::tire::current());
 
-    // Stop if we reach end of map
+    // Stop if ego passes end-of-map region
     if (projC.s_proj > map.s_max() - 1.0) break;
     
-    // --- Update ACC state ---
+    // --- Update ACC state (lead speed & gap) ---
     double v_lead_now = std::numeric_limits<double>::quiet_NaN();
     double d_gap      = std::numeric_limits<double>::quiet_NaN();
 
@@ -380,12 +412,13 @@ int main(int argc, char** argv) {
       d_gap = acc::gap();
     }
 
+    // Simple console print for live monitoring
     printf("vx: %.2f m/s, ey: %.2f m, epsi: %.2f rad, R_cmd: %.1f N, ddelta_cmd: %.3f rad/s, d_gap: %.2f m\n",
           st.vx, ey, epsi, R_cmd, ddelta_cmd, d_gap);
     std::cout << "--------------------------------------------\n";
 
-    // --- Log ---
-    // If you want the actual axle Fy for log, recompute once with current params:
+    // --- Log full state, reference, and tire forces ---
+    // Recompute axle forces with current state and command for logging.
     dynamics::tire::VehicleGeom vg{vp.m, vp.L, vp.d, vp.JG};
     auto fr_now = dynamics::tire::computeForcesBody(
         st.vx, st.vy, st.dpsi, st.delta, u_cmd.R, vg, dynamics::tire::current());
@@ -397,10 +430,10 @@ int main(int argc, char** argv) {
         << ey << "," << epsi << "," << (st.vx - cref.v_ref) << ","
         << cref.v_ref << "," << x_ref << "," << y_ref << "," << psi_ref << ","
         << alpha << "," << dmin << "," << v_lead_now << "," << d_gap << ","
-        << fr_now.Fy_f_body << "," << fr_now.Fy_r_body << "\n";
+        << fr_now.Fy_f_body << "," << fr_now.Fy_r_body << "," << fr_now.Fz_f_body << "," << fr_now.Fz_r_body << "," 
+        << fr_now.Mz << "," << fr_now.alpha_f << "," << fr_now.alpha_r << "\n";
   }
 
   std::cout << "Log written to: " << cli.log_file << "\n";
   return 0;
 }
-

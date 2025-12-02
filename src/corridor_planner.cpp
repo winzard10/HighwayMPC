@@ -1,3 +1,7 @@
+/// ------------------------------------------------ ///
+/// Obstacle Avoidance Module (corridor_planner.cpp) ///
+/// ------------------------------------------------ ///
+
 #include "corridor_planner.hpp"
 #include <algorithm>
 #include <cmath>
@@ -5,7 +9,27 @@
 
 namespace corridor {
 
-// Build raw lateral bounds [lo, up] by sweeping obstacles (disks inflated by margin)
+// -----------------------------------------------------------------------------
+// buildRawBounds
+//
+// Build raw lateral bounds [lo, up] in Frenet ey-space by sweeping obstacles
+// along the reference path. Each obstacle is modeled as a disk (radius +
+// margin + half vehicle track). Bounds are lane-aware:
+//
+//   - p_ref_h[k]  : reference (x,y) at step k
+//   - psi_ref_h[k]: reference heading at step k
+//   - lane_w_h[k] : lane width at step k
+//   - lane_ref_h[k]: which lane this segment belongs to (Left/Right/Center)
+//   - t0, dt      : current time and horizon step
+//   - obstacles   : obstacle set (with ey_obs already filled externally)
+//   - track_w     : vehicle track width
+//   - margin      : extra lateral safety margin
+//   - L_look      : along-track look-ahead distance for obstacles
+//
+// Inputs:
+//   lo, up must be pre-initialized with lane-based bounds before calling.
+//   This function *tightens* lo[k]/up[k] based on obstacles.
+// -----------------------------------------------------------------------------
 void buildRawBounds(
     const std::vector<Eigen::Vector2d>& p_ref_h,
     const std::vector<double>&          psi_ref_h,
@@ -20,68 +44,152 @@ void buildRawBounds(
   const int N = static_cast<int>(p_ref_h.size());
 
   for (int k = 0; k < N; ++k) {
-    const double tk  = t0 + (k + 1) * dt;
+    const double tk  = t0 + (k + 1) * dt;  // look at time at end of step k
     const double psi = psi_ref_h[k];
-    const double tx  = std::cos(psi), ty = std::sin(psi);
+    const double tx  = std::cos(psi), ty = std::sin(psi); // tangential direction
 
-
+    // Store original bounds to use as references for adjustments
     const double lo_k = lo[k];
     const double up_k = up[k];
 
+    // Loop over all obstacles active at time tk
     for (const auto& obs : obstacles.active_at(tk)) {
+      // Vector from reference point to obstacle in world frame
       const double dx = obs.x - p_ref_h[k].x();
       const double dy = obs.y - p_ref_h[k].y();
-      const double ds = dx * tx + dy * ty;               // along-lane
+      const double ds = dx * tx + dy * ty;               // projection along lane
+
+      // Only consider obstacles within look-ahead window
       if (ds < -L_look/3.0 || ds > L_look) continue;
 
+      // Lateral position of obstacle relative to reference centerline, precomputed
       double ey_obs = obstacles.items[obs.idx].ey_obs;
 
+      // Lane-aware corridor clipping logic:
+      //   - Right lane: constrain around lane center at positive ey
+      //   - Left lane : constrain around lane center at negative ey
+      //   - Center    : symmetric around ey=0
       if (lane_ref_h[k] == CenterlineMap::LaneRef::Right) {
-        if (ey_obs <= 0.0) lo[k] = std::max(lo[k], lo_k + lane_w_h[k]/2.0 + (ey_obs + obs.radius + track_w/2.0 + margin));
-        else {
-          if (ey_obs >= lane_w_h[k]/2.0) {up[k] = std::min(up[k], lo_k+ lane_w_h[k]/2.0 +(ey_obs-obs.radius-track_w/2.0 - margin));}
-          else if (lane_w_h[k]/2.0 > -(ey_obs - obs.radius - track_w - margin)) {up[k] = std::min(up[k], up_k - 3.0*lane_w_h[k]/2.0 + (ey_obs - obs.radius - track_w/2.0 - margin));}
-          else {lo[k] = std::max(lo[k], lo_k + lane_w_h[k]/2.0 + (ey_obs + obs.radius + track_w/2.0 + margin));}
-        }
-            
-      } else if (lane_ref_h[k] == CenterlineMap::LaneRef::Left) {
-          if (ey_obs >= 0.0)  up[k] = std::min(up[k], up_k - lane_w_h[k]/2 + (ey_obs - obs.radius - track_w/2.0 - margin));
-          else { 
-            if (ey_obs <= -lane_w_h[k]/2.0) {lo[k] = std::max(lo[k], up_k - lane_w_h[k]/2.0 + (ey_obs + obs.radius + track_w/2.0 + margin));  }
-            else if (lane_w_h[k]/2.0 > ey_obs + obs.radius + track_w + margin) {lo[k] = std::max(lo[k], lo_k + 3.0*lane_w_h[k]/2.0 + (ey_obs + obs.radius + track_w/2.0 + margin)); }
-            else { up[k] = std::min(up[k], up_k - lane_w_h[k]/2.0 + (ey_obs - obs.radius - track_w/2.0 - margin)); }
+        // Right lane: centerline is shifted to +lane_w/2
+        if (ey_obs <= 0.0) {
+          // Obstacle lies "inside" or near centerline: tighten lower bound
+          lo[k] = std::max(lo[k],
+                           lo_k + lane_w_h[k]/2.0 +
+                           (ey_obs + obs.radius + track_w/2.0 + margin));
+        } else {
+          // Obstacle lies on the right side of centerline
+          if (ey_obs >= lane_w_h[k]/2.0) {
+            // Very far right: clip upper bound near it
+            up[k] = std::min(up[k],
+                             lo_k + lane_w_h[k]/2.0 +
+                             (ey_obs - obs.radius - track_w/2.0 - margin));
+          } else if (lane_w_h[k]/2.0 >
+                     -(ey_obs - obs.radius - track_w - margin)) {
+            // Obstacle intersects lane area more centrally: use a different cut
+            up[k] = std::min(up[k],
+                             up_k - 3.0*lane_w_h[k]/2.0 +
+                             (ey_obs - obs.radius - track_w/2.0 - margin));
+          } else {
+            // Fallback: treat as inner obstacle and adjust lower bound
+            lo[k] = std::max(lo[k],
+                             lo_k + lane_w_h[k]/2.0 +
+                             (ey_obs + obs.radius + track_w/2.0 + margin));
           }
+        }
+
+      } else if (lane_ref_h[k] == CenterlineMap::LaneRef::Left) {
+        // Left lane: centerline is shifted to -lane_w/2
+        if (ey_obs >= 0.0)  {
+          // Obstacle on the right side, tighten upper bound
+          up[k] = std::min(up[k],
+                           up_k - lane_w_h[k]/2 +
+                           (ey_obs - obs.radius - track_w/2.0 - margin));
+        } else { 
+          // Obstacle on left side of origin
+          if (ey_obs <= -lane_w_h[k]/2.0) {
+            // Far left: tighten lower bound
+            lo[k] = std::max(lo[k],
+                             up_k - lane_w_h[k]/2.0 +
+                             (ey_obs + obs.radius + track_w/2.0 + margin));
+          }
+          else if (lane_w_h[k]/2.0 > ey_obs + obs.radius + track_w + margin) {
+            // More central intersection with the lane
+            lo[k] = std::max(lo[k],
+                             lo_k + 3.0*lane_w_h[k]/2.0 +
+                             (ey_obs + obs.radius + track_w/2.0 + margin));
+          }
+          else {
+            // Fallback: tighten upper bound
+            up[k] = std::min(up[k],
+                             up_k - lane_w_h[k]/2.0 +
+                             (ey_obs - obs.radius - track_w/2.0 - margin));
+          }
+        }
       } else { 
-          if (ey_obs >= 0.0) up[k] = std::min(up[k], up_k + (ey_obs - obs.radius - track_w/2.0 - margin));
-          else               lo[k] = std::max(lo[k], lo_k + (ey_obs + obs.radius + track_w/2.0 + margin));
+        // Center lane: symmetric around ey = 0
+        if (ey_obs >= 0.0)
+          up[k] = std::min(up[k],
+                           up_k + (ey_obs - obs.radius - track_w/2.0 - margin));
+        else
+          lo[k] = std::max(lo[k],
+                           lo_k + (ey_obs + obs.radius + track_w/2.0 + margin));
       }
     }
 
-    if (lo[k] > up[k]) {  // safety clamp
+    // Safety clamp: if lo exceeds up, collapse to midpoint
+    if (lo[k] > up[k]) {
       const double mid = 0.5 * (lo[k] + up[k]);
       lo[k] = up[k] = mid;
     }
   }
 }
 
-// simple temporal smoothing (slew-rate limit on bounds)
+// -----------------------------------------------------------------------------
+// smoothBounds
+//
+// Simple temporal smoothing on lo/up via a slope (slew-rate) limit.
+//
+// We perform a forward and backward pass enforcing:
+//
+//   lo[k] >= lo[k-1] - slope_per_step
+//   up[k] <= up[k-1] + slope_per_step
+//
+// This prevents extremely sharp corridor steps across the horizon.
+// -----------------------------------------------------------------------------
 static inline void smoothBounds(std::vector<double>& lo,
                                 std::vector<double>& up,
                                 double slope_per_step) {
   const int N = static_cast<int>(lo.size());
+
+  // forward pass
   for (int k = 1; k < N; ++k) {
     lo[k] = std::max(lo[k], lo[k - 1] - slope_per_step);
     up[k] = std::min(up[k], up[k - 1] + slope_per_step);
-    if (lo[k] > up[k]) { const double m = 0.5 * (lo[k] + up[k]); lo[k] = up[k] = m; }
+    if (lo[k] > up[k]) {
+      const double m = 0.5 * (lo[k] + up[k]);
+      lo[k] = up[k] = m;
+    }
   }
+  // backward pass
   for (int k = N - 2; k >= 0; --k) {
     lo[k] = std::max(lo[k], lo[k + 1] - slope_per_step);
     up[k] = std::min(up[k], up[k + 1] + slope_per_step);
-    if (lo[k] > up[k]) { const double m = 0.5 * (lo[k] + up[k]); lo[k] = up[k] = m; }
+    if (lo[k] > up[k]) {
+      const double m = 0.5 * (lo[k] + up[k]);
+      lo[k] = up[k] = m;
+    }
   }
 }
 
-// check straight segment (i, ey_i) → (j, ey_j) stays inside [lo,up]
+// -----------------------------------------------------------------------------
+// segmentInside
+//
+// Check if the line segment in ey-space between (i, ey_i) and (j, ey_j)
+// stays entirely within the [lo[m], up[m]] interval for all m ∈ [i, j].
+//
+// We linearly interpolate ey(m) and test against lo/up + small epsilon.
+// Used as feasibility test for edges in the DP graph.
+// -----------------------------------------------------------------------------
 static inline bool segmentInside(const std::vector<double>& lo,
                                  const std::vector<double>& up,
                                  int i, int j, double ey_i, double ey_j) {
@@ -95,6 +203,27 @@ static inline bool segmentInside(const std::vector<double>& lo,
   return true;
 }
 
+// -----------------------------------------------------------------------------
+// planGraph
+//
+// Plan a smooth ey_ref path within lateral bounds using a layered-graph DP.
+//
+// Inputs:
+//   s_grid      : centerline s at each step (monotone, ~arc length)
+//   lo_raw,up_raw: raw lateral bounds (from buildRawBounds or lane edges)
+//   slope_per_step: max per-step change of lo/up during smoothing
+//
+// Steps:
+//   1) Smooth bounds in time (lo, up).
+//   2) Define 3 candidate ey values at each step: {lo, mid, up}.
+//   3) Run DP over (k,c) nodes:
+//        - edges connect (k,c) → (kp,cp) if straight segment stays inside [lo,up]
+//        - cost = accumulated |dtheta|, where dtheta ~ atan((ey_{kp}-ey_k)/ds)
+//   4) Backtrack best terminal node to get ey_ref[k] path.
+//
+// Output:
+//   Output{ lo, up, ey_ref } with smoothed bounds and chosen center path.
+// -----------------------------------------------------------------------------
 Output planGraph(
     const std::vector<double>& s_grid,     // centerline s per step (monotone)
     const std::vector<double>& lo_raw,
@@ -111,29 +240,37 @@ Output planGraph(
   auto mid = [&](int k) { return 0.5 * (lo[k] + up[k]); };
   constexpr int C = 3; // candidates: 0=lo, 1=mid, 2=up
 
+  // eyOf(k,c) gives candidate ey at step k and candidate index c
   auto eyOf = [&](int k, int c) -> double {
     return (c == 0) ? lo[k] : ((c == 1) ? mid(k) : up[k]);
   };
 
   struct Node { double cost; int prev_k; int prev_c; };
   std::vector<std::array<Node, C>> best(N);
+
+  // Initialize first step with zero cost at all candidates
   for (int c = 0; c < C; ++c) best[0][c] = {0.0, -1, -1};
 
+  // DP over horizon
   for (int k = 0; k < N - 1; ++k) {
     for (int c = 0; c < C; ++c) {
       const double ey_k = eyOf(k, c);
       const double base = best[k][c].cost;
       if (!std::isfinite(base)) continue;
 
+      // Try jumping to any future step kp > k (not only k+1)
       for (int kp = k + 1; kp < N; ++kp) {
         const double ds = std::max(1e-3, s_grid[kp] - s_grid[k]);
         for (int cp = 0; cp < C; ++cp) {
           const double ey_kp = eyOf(kp, cp);
+          // Ensure the segment stays inside bounds
           if (!segmentInside(lo, up, k, kp, ey_k, ey_kp)) continue;
 
+          // Approximate heading change as atan(dy/ds) and accumulate abs
           const double dtheta = std::atan2(ey_kp - ey_k, ds);  // heading change proxy
           const double cost   = base + std::abs(dtheta);
 
+          // Update best candidate for (kp,cp) if cheaper
           if (best[kp][cp].prev_k < 0 || cost < best[kp][cp].cost) {
             best[kp][cp] = {cost, k, c};
           }
@@ -155,10 +292,11 @@ Output planGraph(
     if (pk < 0) break;
     k = pk; c = pc;
   }
-  for (int i = 0; i < k; ++i) ey_ref[i] = ey_ref[k];  // fill leading holes (safety)
+  // If backtracking doesn't reach index 0 (shouldn't normally happen),
+  // fill leading entries with first valid ey_ref as a safety fallback.
+  for (int i = 0; i < k; ++i) ey_ref[i] = ey_ref[k];
 
   return {std::move(lo), std::move(up), std::move(ey_ref)};
 }
 
 } // namespace corridor
-
