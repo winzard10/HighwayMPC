@@ -613,41 +613,8 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VContro
         }
     }
 
-    // // (7) acceleration bounds a_min(v) <= (vx_{k+1} - vx_k)/dt <= a_max(v)
-    // for (int k = 0; k < N; ++k) {
-    //     const int row_up = row;
-    //     const int row_lo = row + 1;
-
-    //     // decide what speed to use for limits (vref or some nominal):
-    //     const int idx_ref = std::min<int>(k, (int)ref.hp.size() - 1);
-    //     const double vref = (idx_ref >= 0) ? ref.hp[idx_ref].v_ref : 0.0;
-
-    //     const double amax = ax_max(vref, acc_coeffs);
-    //     const double amin = ax_min(vref, acc_coeffs);
-
-    //     const int col_vx_k   = idx_x(k,   id_vx);
-    //     const int col_vx_k1  = idx_x(k+1, id_vx);
-
-    //     // (vx_{k+1} - vx_k)/dt <= amax
-    //     Aint.emplace_back(row_up, col_vx_k1,  1.0 / P.dt);
-    //     Aint.emplace_back(row_up, col_vx_k,  -1.0 / P.dt);
-    //     lin_v.push_back(-OSQP_INFTY);
-    //     uin_v.push_back(amax);
-    //     ++row;
-
-    //     // -(vx_{k+1} - vx_k)/dt <= -amin  →  (vx_k - vx_{k+1})/dt <= -amin
-    //     Aint.emplace_back(row_lo, col_vx_k,   1.0 / P.dt);
-    //     Aint.emplace_back(row_lo, col_vx_k1, -1.0 / P.dt);
-    //     lin_v.push_back(-OSQP_INFTY);
-    //     uin_v.push_back(amin);
-    //     ++row;
-    // }
-
     // (7) acceleration bounds: amin <= (vx_{k+1} - vx_k)/dt <= amax
     for (int k = 0; k < N; ++k) {
-        const int row_up = row;
-        const int row_lo = row + 1;
-
         // decide what speed to use for limits (vref or some nominal):
         const int idx_ref = std::min<int>(k, (int)ref.hp.size() - 1);
         const double vref = (idx_ref >= 0) ? ref.hp[idx_ref].v_ref : 0.0;
@@ -745,15 +712,15 @@ MPCControl LTV_MPC::solveQP(const MPCState& x0, const MPCRef& ref, const VContro
             
     //         // For k=0, constrain against the PREVIOUS ACTUAL command
     //         if (k == 0) {
-    //             // // You need to pass the last applied R (u_prev) to solveQP
-    //             // // For now, use 0.0 or x0.ax * mass if u_prev is unavailable
-    //             // double R_prev = u_prev.R;
+    //             // You need to pass the last applied R (u_prev) to solveQP
+    //             // For now, use 0.0 or x0.ax * mass if u_prev is unavailable
+    //             double R_prev = u_prev.R;
                 
-    //             // // R_0 - R_prev <= max_delta
-    //             // Aint.emplace_back(row, col_R_k, 1.0);
-    //             // lin_v.push_back(R_prev - max_delta_R);
-    //             // uin_v.push_back(R_prev + max_delta_R);
-    //             // ++row;
+    //             // R_0 - R_prev <= max_delta
+    //             Aint.emplace_back(row, col_R_k, 1.0);
+    //             lin_v.push_back(R_prev - max_delta_R);
+    //             uin_v.push_back(R_prev + max_delta_R);
+    //             ++row;
     //         } 
     //         else {
     //             // R_k - R_{k-1} <= max_delta

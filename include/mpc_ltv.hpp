@@ -22,18 +22,18 @@ struct MPCParams {
     double dt;
 
     // weights
-    double wy    = 2.5;
-    double wpsi  = 0.10;
-    double wv    = 1.0;
+    double wy    = 2.0;
+    double wpsi  = 0.1;
+    double wv    = 1.5;        // 0.5 to see smoother ddelta/trajectory // 1.5
     double wR    = 1e-4;
     double wdR   = 1e-5;
     double wddR  = 2e-5;
     double wdd   = 8.0;
-    double wddd  = 10.0;
+    double wddd  = 2.0;
     double wyf   = 3.0;
     double wpsif = 8.0;
 
-    double w_acc_slack = 1e3;
+    double w_acc_slack = 10.0; // slack variable penalty for ACC -> allowing to violate headway approx 14 cm.
 
     // bounds
     double ddelta_max = 0.25;
