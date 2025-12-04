@@ -50,7 +50,7 @@ pip install numpy matplotlib
 ./build/sim_lane_follow
 
 # Run simulations with lane change
-./build/sim_lane_follow --lane-from right --lane-to left --t-change 5 --T-change 4
+./build/sim_lane_follow --lane-from right --lane-to left --t-change 10 --T-change 5
 
 # Visualize results
 python3 viz_lane_follow.py sim_log.csv
@@ -60,7 +60,7 @@ cd build
 cmake ..
 make
 cd ..
-./build/sim_lane_follow --lane-from right --lane-to left --t-change 5 --T-change 4
+./build/sim_lane_follow
 python3 viz_lane_follow.py
 
 ```

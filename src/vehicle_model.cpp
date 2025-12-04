@@ -50,8 +50,8 @@ State step(const State& s, const Control& u,
   const double dt = vp.dt;
 
   // Clamp commanded rear force and steering rate to actuator limits
-  const double R_cmd  = clamp(u.R,      lim.R_min, lim.R_max);
-  const double ddel   = clamp(u.ddelta, -lim.ddelta_max, lim.ddelta_max);
+  double R_cmd  = clamp(u.R,      lim.R_min, lim.R_max);
+  double ddel   = clamp(u.ddelta, -lim.ddelta_max, lim.ddelta_max);
 
   // Integrate steering angle and clamp to steering limits
   n.delta = clamp(s.delta + ddel*dt, -lim.delta_max, lim.delta_max);

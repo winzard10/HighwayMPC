@@ -51,6 +51,8 @@ dv     = _need("dv")
 v_ref  = _need("v_ref")
 x_ref  = _need("x_ref")
 y_ref  = _need("y_ref")
+Fx_f   = _need("Fx_f")
+Fx_r   = _need("Fx_r")
 Fy_f   = _need("Fy_f")
 Fy_r   = _need("Fy_r")
 Fz_f   = _need("Fz_f")
@@ -130,8 +132,8 @@ fig1, ax1 = plt.subplots(figsize=(8, 6))
 # 1) XY trajectory + borders + divider
 if have_map:
     if xlb is not None and xrb is not None:
-        ax1.plot(xlb, ylb, label="Left lane outer border", linewidth=1)
-        ax1.plot(xrb, yrb, label="Right lane outer border", linewidth=1)
+        ax1.plot(xlb, ylb, label="Left lane outer border", linewidth=5)
+        ax1.plot(xrb, yrb, label="Right lane outer border", linewidth=5)
         try:
             idxL = np.argsort(xl); idxR = np.argsort(xr)
             xL, yL = xl[idxL], yl[idxL]
@@ -141,8 +143,8 @@ if have_map:
         except Exception:
             pass
     else:
-        ax1.plot(xl, yl, label="Left lane center", linewidth=1)
-        ax1.plot(xr, yr, label="Right lane center", linewidth=1)
+        ax1.plot(xl, yl, label="Left lane center", linewidth=5)
+        ax1.plot(xr, yr, label="Right lane center", linewidth=5)
         try:
             idxL = np.argsort(xl); idxR = np.argsort(xr)
             xL, yL = xl[idxL], yl[idxL]
@@ -152,11 +154,11 @@ if have_map:
         except Exception:
             pass
 
-    ax1.plot(xcenter, ycenter, linestyle='-', linewidth=1.5, label="Lane divider (centerline)")
+    ax1.plot(xcenter, ycenter, linestyle='--', linewidth=3, label="Lane divider (centerline)")
 
 # Vehicle reference & actual
-ax1.plot(x_ref, y_ref, linewidth=2, label="Reference path")
-ax1.plot(x, y, "--", label="Vehicle path")
+ax1.plot(x_ref, y_ref, linestyle='--',linewidth=2, label="Reference path")
+ax1.plot(x, y, ".", label="Vehicle path", color="C0", markersize=1)
 
 # Obstacles
 if obstacles:
@@ -399,14 +401,29 @@ axs4[4].legend(); axs4[4].grid(True)
 
 # ---------------------------------------------------
 # 5) Friction circle (Fx vs Fy)
-axs4[5].plot(R_cmd, Fy_f, ".", markersize=2, label="Front")
-axs4[5].plot(R_cmd, Fy_r, ".", markersize=2, label="Rear")
+axs4[5].plot(Fx_f, Fy_f, ".", markersize=2, label="Front")
+axs4[5].plot(Fx_r, Fy_r, ".", markersize=2, label="Rear")
+
+Fz_f_mean = np.mean(Fz_f)     # Approximate mean normal load for visualization
+Fz_r_mean = np.mean(Fz_r)
+
+theta = np.linspace(0, 2*np.pi, 400)
+
+R_f = mu_f * Fz_f_mean
+R_r = mu_r * Fz_r_mean
+
+axs4[5].plot(R_f * np.cos(theta),
+             R_f * np.sin(theta),
+             "--", linewidth=1.0, label="Front limit")
+
+axs4[5].plot(R_r * np.cos(theta),
+             R_r * np.sin(theta),
+             "--", linewidth=1.0, label="Rear limit")
+
 axs4[5].set_title("Friction Circle (Fx vs Fy)")
 axs4[5].set_xlabel("Fx [N]")
 axs4[5].set_ylabel("Fy [N]")
 axs4[5].legend(); axs4[5].grid(True)
 
 plt.tight_layout()
-plt.show()
-
 plt.show()

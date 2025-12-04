@@ -162,8 +162,24 @@ ForceResult computeForcesBody(double vx, double vy, double dpsi,
     double Fy_r_tire = -2.0 * pacejkaFy(tp.Br,tp.Cr,Dr_w,tp.Er,a_r);
 
     // Longitudinal forces: RWD (front Fx=0, rear Fx=R_rear)
-    double Fx_f_tire = 0.0;      // front: no drive/brake
-    double Fx_r_tire = R_rear;   // rear: commanded traction/brake
+    double Fx_f_tire;      // front: no drive/brake
+    double Fx_r_tire;   // rear: commanded traction/brake
+
+    if (R_rear >= 0.0) {
+        // --- GAS (RWD) ---
+        // 100% torque to rear axle
+        Fx_f_tire = 0.0;
+        Fx_r_tire = R_rear;
+    } 
+    else {
+        // --- BRAKE (All-Wheel Braking) ---
+        // Standard Bias: 60% Front, 40% Rear
+        // Note: R_rear is negative here, so forces will be negative
+        const double brake_bias = 0.60; 
+        
+        Fx_f_tire = R_rear * brake_bias;       // e.g. -1000 * 0.6 = -600 N
+        Fx_r_tire = R_rear * (1.0 - brake_bias); // e.g. -1000 * 0.4 = -400 N
+    }
 
     // combined-slip clamp at each axle using friction ellipse
     clampEllipse(Fx_f_tire, Fy_f_tire, tp.muf, Fzf_dyn);

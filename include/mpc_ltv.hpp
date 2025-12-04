@@ -41,8 +41,6 @@ struct MPCParams {
     double w_acc_slack = 10.0; // slack variable penalty for ACC -> allowing to violate headway approx 14 cm.
 
     // hard bounds
-    double ddelta_max = 0.25;   // max steering rate [rad/s]
-    double delta_max  = 0.40;   // steering angle limit [rad]
     double v_min = 0.0,  v_max = 40.0;  // speed limits [m/s]
 
     // corridor bounds (used when obstacle constraints provide lateral limits)

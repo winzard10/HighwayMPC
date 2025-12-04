@@ -231,7 +231,7 @@ int main(int argc, char** argv) {
   log << std::fixed << std::setprecision(6);
   // CSV header for post-processing (MATLAB/Python etc.)
   log << "t,s,x,y,psi,vx,vy,dpsi,delta,ax,ay,ddpsi,jerk,R_cmd,ddelta_cmd,ey,epsi,dv,"
-         "v_ref,x_ref,y_ref,psi_ref,alpha,dmin,v_lead,d_gap,Fy_f,Fy_r,Fz_f,Fz_r,Mz,alpha_f,alpha_r\n";
+         "v_ref,x_ref,y_ref,psi_ref,alpha,dmin,v_lead,d_gap,Fx_f,Fx_r,Fy_f,Fy_r,Fz_f,Fz_r,Mz,alpha_f,alpha_r\n";
 
   // --- Simulation loop setup ---
   const int steps = static_cast<int>(cli.T / vp.dt);
@@ -390,9 +390,9 @@ int main(int argc, char** argv) {
     if (!std::isfinite(dmin)) dmin = std::numeric_limits<double>::quiet_NaN();
 
     // --- Apply control and advance high-fidelity vehicle model ---
-    const double R_cmd      = clamp(u_mpc.R,      lim.R_min, lim.R_max);
-    const double ddelta_cmd = clamp(u_mpc.ddelta, -lim.ddelta_max, lim.ddelta_max);
-    const VControl u_cmd{R_cmd, ddelta_cmd};
+    double R_cmd      = clamp(u_mpc.R,      lim.R_min, lim.R_max);
+    double ddelta_cmd = clamp(u_mpc.ddelta, -lim.ddelta_max, lim.ddelta_max);
+    VControl u_cmd{R_cmd, ddelta_cmd};
     u_mpc_h[k] = u_cmd;
     ax_h[k]    = st.ax;  // log current ax (for jerk computation next step)
 
@@ -421,15 +421,16 @@ int main(int argc, char** argv) {
     // Recompute axle forces with current state and command for logging.
     dynamics::tire::VehicleGeom vg{vp.m, vp.L, vp.d, vp.JG};
     auto fr_now = dynamics::tire::computeForcesBody(
-        st.vx, st.vy, st.dpsi, st.delta, u_cmd.R, vg, dynamics::tire::current());
+        st.vx, st.vy, st.dpsi, st.delta, R_cmd, vg, dynamics::tire::current());
 
     log << t << "," << projC.s_proj << "," << st.x << "," << st.y << ","
         << st.psi << "," << st.vx << "," << st.vy << "," << st.dpsi << "," << st.delta << "," 
         << st.ax << "," << st.ay << "," << st.ddpsi << "," << (st.ax-ax_prev)/mpcp.dt << ","
-        << u_cmd.R << "," << u_cmd.ddelta << ","
+        << R_cmd << "," << ddelta_cmd << ","
         << ey << "," << epsi << "," << (st.vx - cref.v_ref) << ","
         << cref.v_ref << "," << x_ref << "," << y_ref << "," << psi_ref << ","
         << alpha << "," << dmin << "," << v_lead_now << "," << d_gap << ","
+        << fr_now.Fx_f_body << "," << fr_now.Fx_r_body << ","
         << fr_now.Fy_f_body << "," << fr_now.Fy_r_body << "," << fr_now.Fz_f_body << "," << fr_now.Fz_r_body << "," 
         << fr_now.Mz << "," << fr_now.alpha_f << "," << fr_now.alpha_r << "\n";
   }
