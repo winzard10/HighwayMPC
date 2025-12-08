@@ -38,10 +38,12 @@ void buildRawBounds(
     double t0, double dt,
     const Obstacles& obstacles,
     double track_w,
-    double margin, double L_look,
     std::vector<double>& lo, std::vector<double>& up) {
 
   const int N = static_cast<int>(p_ref_h.size());
+  CorridorParams cor_params;
+  double margin = cor_params.margin;
+  double L_look = cor_params.L_look;
 
   for (int k = 0; k < N; ++k) {
     const double tk  = t0 + (k + 1) * dt;  // look at time at end of step k
@@ -204,6 +206,58 @@ static inline bool segmentInside(const std::vector<double>& lo,
 }
 
 // -----------------------------------------------------------------------------
+// adaptEyRefPWA
+//
+// Applies a piecewise-affine (PWA) adaptation rule to shift the reference
+// lateral offset toward the road centerline while respecting corridor limits.
+//
+// Inputs:
+//   ey_road  - Desired road center e_y profile (lane centerline).
+//   ey_hat_k - Current estimated lateral position of the vehicle at step k.
+//
+// Output:
+//   A modified lateral reference sequence ey_ref that blends road geometry
+//   with a stabilizing PWA policy around the current vehicle offset.
+// -----------------------------------------------------------------------------
+
+std::vector<double> adaptEyRefPWA(
+    const std::vector<double>& ey_road,
+    double ey_hat_k)
+{
+    const int N = static_cast<int>(ey_road.size()) - 1; // j = 0..N
+    std::vector<double> ey_ref_pwa(N + 1);
+
+    if (N <= 3) {
+        // Degenerate short-horizon case: just linear interp from ey_hat_k to ey_road[j]
+        for (int j = 0; j <= N; ++j) {
+            double alpha = (N == 0) ? 0.0 : static_cast<double>(j) / N;
+            ey_ref_pwa[j] = (1.0 - alpha) * ey_hat_k + alpha * ey_road[j];
+        }
+        return ey_ref_pwa;
+    }
+
+    for (int j = 0; j <= N; ++j) {
+        const double e_road_j = ey_road[j];
+
+        if (j <= 3) {
+            // First segment:  hat{e}_y,k + ((e_road - hat{e}_y,k)/2) * j/3
+            double alpha = static_cast<double>(j) / 3.0;
+            ey_ref_pwa[j] =
+                ey_hat_k + 0.5 * (e_road_j - ey_hat_k) * alpha;
+        } else {
+            // Second segment:
+            // (hat{e}_y,k + e_road)/2 + ((e_road - hat{e}_y,k)/2) * (j-3)/(N-3)
+            double mid   = 0.5 * (ey_hat_k + e_road_j);
+            double alpha = static_cast<double>(j - 3) / static_cast<double>(N - 3);
+            ey_ref_pwa[j] =
+                mid + 0.5 * (e_road_j - ey_hat_k) * alpha;
+        }
+    }
+
+    return ey_ref_pwa;
+}
+
+// -----------------------------------------------------------------------------
 // planGraph
 //
 // Plan a smooth ey_ref path within lateral bounds using a layered-graph DP.
@@ -227,10 +281,11 @@ static inline bool segmentInside(const std::vector<double>& lo,
 Output planGraph(
     const std::vector<double>& s_grid,     // centerline s per step (monotone)
     const std::vector<double>& lo_raw,
-    const std::vector<double>& up_raw,
-    double slope_per_step) {
+    const std::vector<double>& up_raw) {
 
   const int N = static_cast<int>(s_grid.size());
+  CorridorParams cor_params;
+  double slope_per_step = cor_params.slope;
 
   // 1) smooth the bounds
   std::vector<double> lo = lo_raw, up = up_raw;

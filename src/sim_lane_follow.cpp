@@ -268,7 +268,6 @@ int main(int argc, char** argv) {
     const double ny =  std::cos(psi_ref);
     const double ey   = (st.x - x_ref) * nx + (st.y - y_ref) * ny;
     const double epsi = wrapAngle(st.psi - psi_ref);
-    // const double dv   = st.vx - cref.v_ref;  // (not used directly here)
 
     // --- MPC preview horizon (ref.hp and corridor frames) ---
     MPCRef pref; pref.hp.resize(mpcp.N);
@@ -339,20 +338,16 @@ int main(int argc, char** argv) {
     if (accp.enable) xk.d = acc::gap();  // ACC gap state
 
     // --- Corridor planning (obstacles → lateral bounds) ---
-    const double t0     = t;
-    const double margin = 0.1;  // safety margin around obstacles
-    const double L_look = 70.0; // forward look-ahead distance for obstacles
-    const double slope  = 0.25; // temporal smoothing slope for bounds
-
     corridor::buildRawBounds(
         p_ref_h, psi_ref_h, lane_w_h, lane_ref_h,
-        t0, mpcp.dt, obstacles, vp.track_w, margin, L_look, lo, up);
+        t, mpcp.dt, obstacles, vp.track_w, lo, up);
 
-    corridor::Output cor = corridor::planGraph(s_grid, lo, up, slope);
+    corridor::Output cor = corridor::planGraph(s_grid, lo, up);
+    std::vector<double> ey_ref = corridor::adaptEyRefPWA(cor.ey_ref, ey);
 
     // Fill MPC lateral reference from the planned corridor centerline.
     pref.ey_ref.resize(mpcp.N + 1);
-    for (int i = 0; i < mpcp.N; ++i) pref.ey_ref[i] = cor.ey_ref[i];
+    for (int i = 0; i < mpcp.N; ++i) pref.ey_ref[i] = ey_ref[i];
     pref.ey_ref.back() = pref.ey_ref[mpcp.N - 1];
     pref.ey_ref_N      = pref.ey_ref.back();
 
