@@ -1,2 +1,0 @@
-/usr/bin/ar qc libcorridor_planner.a CMakeFiles/corridor_planner.dir/src/corridor_planner.cpp.o
-/usr/bin/ranlib libcorridor_planner.a

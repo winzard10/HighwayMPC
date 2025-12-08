@@ -1,2 +1,0 @@
-/usr/bin/ar qc libcenterline.a CMakeFiles/centerline.dir/src/centerline_map.cpp.o
-/usr/bin/ranlib libcenterline.a

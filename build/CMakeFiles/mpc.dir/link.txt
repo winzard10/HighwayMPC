@@ -1,2 +1,0 @@
-/usr/bin/ar qc libmpc.a CMakeFiles/mpc.dir/src/mpc_ltv.cpp.o
-/usr/bin/ranlib libmpc.a

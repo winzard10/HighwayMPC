@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG CMakeFiles/centerline_demo.dir/src/demo_centerline.cpp.o -o centerline_demo  libcenterline.a 
