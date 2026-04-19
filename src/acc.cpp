@@ -1,5 +1,5 @@
 /// -------------------- /// 
-/// ACC module (acc.cpp) ///
+/// ACC module. (acc.cpp) ///
 /// -------------------- ///
 
 #include "acc.hpp"

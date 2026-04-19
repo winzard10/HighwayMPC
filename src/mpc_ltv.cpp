@@ -1,5 +1,5 @@
 /// --------------------------------------------- /// 
-/// Highway LTV-MPC implementation (mpc_ltv.cpp)  ///
+/// Highway LTV-MPC implementation. (mpc_ltv.cpp)  ///
 /// --------------------------------------------- ///
 
 #include "mpc_ltv.hpp"

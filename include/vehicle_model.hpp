@@ -1,5 +1,5 @@
 /// --------------------------------------- /// 
-/// Vehicle Parameters (vehicle_model.hpp)  ///
+/// Vehicle Parameters. (vehicle_model.hpp)  ///
 /// --------------------------------------- ///
 
 #pragma once

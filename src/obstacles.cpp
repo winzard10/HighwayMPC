@@ -1,5 +1,5 @@
 /// ------------------------------- /// 
-/// Obstacle module (obstacles.cpp) ///
+/// Obstacle module. (obstacles.cpp) ///
 /// ------------------------------- ///
 
 #include "obstacles.hpp"

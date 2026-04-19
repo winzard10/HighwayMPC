@@ -1,5 +1,5 @@
 /// ---------------------------------------------- ///
-/// Corridor Planner Module (corridor_planner.hpp) ///
+/// Corridor Planner Module. (corridor_planner.hpp) ///
 /// ---------------------------------------------- ///
 
 #pragma once

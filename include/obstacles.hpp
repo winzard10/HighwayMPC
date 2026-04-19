@@ -1,5 +1,5 @@
 /// ----------------------------------- /// 
-/// Obstacle Parameters (obstacles.hpp) ///
+/// Obstacle Parameters. (obstacles.hpp) ///
 /// ----------------------------------- ///
 
 #pragma once

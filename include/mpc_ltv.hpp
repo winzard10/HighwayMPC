@@ -1,5 +1,5 @@
 /// ------------------------------------- /// 
-/// Highway LTV-MPC header (mpc_ltv.hpp)  ///
+/// Highway LTV-MPC header. (mpc_ltv.hpp)  ///
 /// ------------------------------------- ///
 
 #pragma once

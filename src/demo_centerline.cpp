@@ -1,5 +1,5 @@
 /// ----------------------------------------- ///
-/// Centerline Map Demo (demo_centerline.cpp) ///
+/// Centerline Map Demo. (demo_centerline.cpp) ///
 /// ----------------------------------------- ///
 
 #include "centerline_map.hpp"

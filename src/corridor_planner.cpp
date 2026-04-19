@@ -1,5 +1,5 @@
 /// ------------------------------------------------ ///
-/// Obstacle Avoidance Module (corridor_planner.cpp) ///
+/// Obstacle Avoidance Module. (corridor_planner.cpp) ///
 /// ------------------------------------------------ ///
 
 #include "corridor_planner.hpp"

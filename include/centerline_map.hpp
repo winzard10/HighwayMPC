@@ -1,5 +1,5 @@
 /// ------------------------------------------ ///
-/// Centerline Map Header (centerline_map.hpp) ///
+/// Centerline Map Header. (centerline_map.hpp) ///
 /// ------------------------------------------ ///
 
 #pragma once

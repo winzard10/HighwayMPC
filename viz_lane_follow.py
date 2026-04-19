@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-# ---------- inputs ----------
+# ---------- inputs -----------
 sim_path  = sys.argv[1] if len(sys.argv) > 1 else "sim_log.csv"
 map_path  = "data/lane_centerlines.csv"
 # Prefer enhanced file if present

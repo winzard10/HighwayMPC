@@ -1,5 +1,5 @@
 /// ------------------------------- /// 
-/// Tire Dynamics (tire_model.cpp)  ///
+/// Tire Dynamics. (tire_model.cpp)  ///
 /// ------------------------------- ///
 
 #include "tire_model.hpp"

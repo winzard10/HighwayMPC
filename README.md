@@ -65,10 +65,17 @@ python3 viz_lane_follow.py
 
 ```
 
-## Citation 
+<!-- ## Citation 
 
 ROB 590: Directed Study
 
 Model Predictive Control for Highway Autonomous Driving:
 A Study on Model Predictive Control Architectures for Passenger Autonomous Vehicles by **Phurithat Tangsripairoje**, Department of Robotics, University of Michigan
-Supervised by Prof. Tulga Ersal, Department of Mechanical Engineering, University of Michigan
+Supervised by Prof. Tulga Ersal, Department of Mechanical Engineering, University of Michigan -->
+
+## Citation 
+
+AEROSP 740: Introduction to Model Predictive Control
+
+Model Predictive Control for Highway Autonomous Driving:
+A Study on Model Predictive Control Architectures for Passenger Autonomous Vehicles by **Phurithat Tangsripairoje**, Department of Robotics, University of Michigan

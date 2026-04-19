@@ -1,5 +1,5 @@
 /// --------------------------------- /// 
-/// Tire Parameters (tire_model.hpp)  ///
+/// Tire Parameters. (tire_model.hpp)  ///
 /// --------------------------------- ///
 
 #pragma once

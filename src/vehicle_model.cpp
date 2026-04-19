@@ -1,5 +1,5 @@
 /// ------------------------------------- /// 
-/// Vehicle Dynamics (vehicle_model.cpp)  ///
+/// Vehicle Dynamics. (vehicle_model.cpp)  ///
 /// ------------------------------------- ///
 
 #include "vehicle_model.hpp"

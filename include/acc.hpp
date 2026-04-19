@@ -1,5 +1,5 @@
 /// ------------------------ /// 
-/// ACC Parameters (acc.hpp) ///
+/// ACC Parameters. (acc.hpp) ///
 /// ------------------------ ///
 
 #pragma once

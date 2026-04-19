@@ -1,5 +1,5 @@
 /// ------------------------------------- ///
-/// Main Simulation (sim_lane_follow.cpp) ///
+/// Main Simulation. (sim_lane_follow.cpp) ///
 /// ------------------------------------- ///
 
 #include "centerline_map.hpp"
